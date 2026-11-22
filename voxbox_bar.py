@@ -481,9 +481,9 @@ class FloatingBarWindow(Gtk.Window):
         cr.set_source_rgba(0.04, 0.04, 0.05, _lerp(0.76, 0.96, ease))
         cr.fill_preserve()
         cr.set_line_width(1.2)
-        br = _lerp(1.0, 0.04, self._proc_blend)
-        bg = _lerp(1.0, 0.52, self._proc_blend)
-        bb = _lerp(1.0, 1.0, self._proc_blend)
+        br = _lerp(1.0, 0.55, self._proc_blend)
+        bg = _lerp(1.0, 0.51, self._proc_blend)
+        bb = _lerp(1.0, 0.97, self._proc_blend)
         ba = _lerp(0.24, 0.68, self._proc_blend)
         cr.set_source_rgba(br, bg, bb, ba)
         cr.stroke()
@@ -520,10 +520,10 @@ class FloatingBarWindow(Gtk.Window):
             bx = start_x + i * (bar_w + gap)
             bh = self._bars[i]
             by = ay + (ah - bh) / 2.0
-            # Blend smoothly from crisp white (recording) to Apple Acoustic Blue (polishing)
-            r_col = _lerp(1.0, 0.25, self._proc_blend)
-            g_col = _lerp(1.0, 0.61, self._proc_blend)
-            b_col = _lerp(1.0, 1.0, self._proc_blend)
+            # Blend smoothly from crisp white (recording) to Studio Indigo (polishing)
+            r_col = _lerp(1.0, 0.56, self._proc_blend)
+            g_col = _lerp(1.0, 0.52, self._proc_blend)
+            b_col = _lerp(1.0, 0.98, self._proc_blend)
             shimmer = 0.65 + 0.35 * (bh / 16.0)
             a_col = min(1.0, _lerp(0.95, shimmer, self._proc_blend)) * content_alpha
             cr.set_source_rgba(r_col, g_col, b_col, a_col)
@@ -549,7 +549,7 @@ class FloatingBarWindow(Gtk.Window):
             cr.stroke()
         else:
             spin_a = ((self._proc_blend - 0.5) * 2.0) * content_alpha
-            cr.set_source_rgba(0.25, 0.61, 1.0, 0.95 * spin_a)
+            cr.set_source_rgba(0.56, 0.52, 0.98, 0.95 * spin_a)
             cr.set_line_width(2.1)
             cr.set_line_cap(cairo.LINE_CAP_ROUND)
             start_ang = self._t * 6.5

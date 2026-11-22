@@ -1799,14 +1799,14 @@ function renderSettingsContent() {
             <div class="pref-title">Configuration</div>
             <div class="pref-desc"><code>${esc(paths.config)}</code></div>
           </div>
-          <button class="btn btn-secondary btn-sm" id="btn-open-cfg-dir">Reveal</button>
+          <button class="btn btn-secondary btn-sm" id="btn-open-cfg-dir">Open Folder</button>
         </div>
         <div class="pref-row">
           <div>
             <div class="pref-title">Database &amp; Logs</div>
             <div class="pref-desc"><code>${esc(paths.data)}</code></div>
           </div>
-          <button class="btn btn-secondary btn-sm" id="btn-open-data-dir">Reveal</button>
+          <button class="btn btn-secondary btn-sm" id="btn-open-data-dir">Open Folder</button>
         </div>
         <div class="pref-row">
           <div>
