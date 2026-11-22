@@ -116,11 +116,13 @@ class VoxBoxAPI:
                     elif path == "/api/scratchpad":
                         q = qs.get("q", [""])[0]
                         self._send_json({"items": app_ref.db.list_notes(q)})
+                    elif path == "/api/models":
+                        self._send_json({"items": app_ref.models.list_models(app_ref.config.stt.resolved_model_path)})
                     elif path == "/api/system/resources":
                         self._send_json(
                             {
                                 "microphones": list_microphones(),
-                                "whisper_models": list_whisper_models(),
+                                "whisper_models": app_ref.models.list_models(app_ref.config.stt.resolved_model_path),
                                 "ollama_models": list_ollama_models(app_ref.config.llm.base_url),
                                 "autostart": app_ref.is_autostart_enabled(),
                             }
@@ -213,6 +215,20 @@ class VoxBoxAPI:
                         target = DATA_DIR if body.get("kind") != "config" else CONFIG_PATH.parent
                         subprocess.Popen(["xdg-open", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                         self._send_json({"ok": True})
+                    elif path == "/api/models/download":
+                        res = app_ref.models.start_download(str(body.get("id", "")))
+                        self._send_json(res)
+                    elif path == "/api/models/cancel":
+                        ok = app_ref.models.cancel_download(str(body.get("id", "")))
+                        self._send_json({"ok": ok})
+                    elif path == "/api/models/select":
+                        model_id = str(body.get("id", ""))
+                        target = app_ref.models.resolve_path(model_id) if model_id else Path(str(body.get("path", "")))
+                        if not target or not target.is_file():
+                            self._send_json({"error": "Model is not downloaded yet"}, status=400)
+                            return
+                        updated = app_ref.update_settings({"stt": {"model_path": str(target)}})
+                        self._send_json({"ok": True, "config": updated.to_dict()})
                     elif path == "/api/dictate/toggle":
                         app_ref.toggle_manual_recording()
                         self._send_json({"ok": True, "state": app_ref.current_state})
@@ -251,7 +267,12 @@ class VoxBoxAPI:
                 try:
                     parts = [p for p in path.split("/") if p]
                     if len(parts) == 3 and parts[0] == "api":
-                        resource, item_id = parts[1], int(parts[2])
+                        resource, raw_id = parts[1], parts[2]
+                        if resource == "models":
+                            ok = app_ref.models.delete_model(raw_id, app_ref.config.stt.resolved_model_path)
+                            self._send_json({"ok": ok})
+                            return
+                        item_id = int(raw_id)
                         if resource == "dictations":
                             ok = app_ref.db.delete_dictation(item_id)
                             app_ref.tray.update_history(app_ref.db.list_dictations(limit=8))
@@ -269,6 +290,8 @@ class VoxBoxAPI:
                         self._send_json({"ok": ok})
                     else:
                         self._send_json({"error": "Not found"}, status=404)
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, status=400)
                 except Exception as e:
                     log.exception("DELETE %s failed", path)
                     self._send_json({"error": str(e)}, status=500)

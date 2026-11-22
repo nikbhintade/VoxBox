@@ -331,6 +331,11 @@ function renderInsightsView() {
   }).join("");
 
   const avgWords = ins.total_dictations ? Math.round(ins.total_words / ins.total_dictations) : 0;
+  const totalPipelineMs = ins.avg_stt_ms + ins.avg_llm_ms;
+  const maxBarMs = Math.max(totalPipelineMs, 600);
+  const sttPct = ins.avg_stt_ms ? Math.max(10, Math.round((ins.avg_stt_ms / maxBarMs) * 100)) : 0;
+  const llmPct = ins.avg_llm_ms ? Math.max(10, Math.round((ins.avg_llm_ms / maxBarMs) * 100)) : 0;
+  const totPct = totalPipelineMs ? Math.max(12, Math.round((totalPipelineMs / maxBarMs) * 100)) : 0;
 
   return `
     <div class="page-container">
@@ -354,15 +359,15 @@ function renderInsightsView() {
           <div class="metric-big">${ins.total_fixes.toLocaleString()}</div>
           <div class="metric-caption">Fixes made by VoxBox</div>
           <div class="metric-list">
-            <div>${ins.words_corrected.toLocaleString()} AI cleanup edits</div>
-            <div>${ins.dict_fixes.toLocaleString()} dictionary &amp; snippet fixes</div>
+            <div>${ins.words_corrected.toLocaleString()} AI cleanup ${ins.words_corrected === 1 ? "edit" : "edits"}</div>
+            <div>${ins.dict_fixes.toLocaleString()} dictionary &amp; snippet ${ins.dict_fixes === 1 ? "fix" : "fixes"}</div>
           </div>
         </div>
         <div class="card">
           <div class="metric-big">${ins.total_words.toLocaleString()}</div>
           <div class="metric-caption">Total words dictated</div>
           <div class="metric-list">
-            <div>${ins.total_dictations.toLocaleString()} total sessions</div>
+            <div>${ins.total_dictations.toLocaleString()} total ${ins.total_dictations === 1 ? "session" : "sessions"}</div>
             <div>~${avgWords} words per dictation</div>
           </div>
         </div>
@@ -370,28 +375,31 @@ function renderInsightsView() {
 
       <div class="insights-bottom">
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:baseline">
-            <h3 style="margin:0;font-size:17px">Local Latency</h3>
-            <span style="font-size:11.5px;color:var(--text-muted)">100% ON-DEVICE GPU</span>
+          <div class="card-header-row">
+            <h3>Local Latency</h3>
+            <span class="card-header-sub">100% ON-DEVICE GPU</span>
           </div>
           <div class="bar-row">
             <div class="bar-label">CUDA Whisper</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, Math.max(18, (ins.avg_stt_ms / 1000) * 100))}%">${ins.avg_stt_ms} ms</div></div>
+            <div class="bar-track"><div class="bar-fill" style="width:${sttPct}%"></div></div>
+            <div class="bar-value">${ins.avg_stt_ms} ms</div>
           </div>
           <div class="bar-row">
             <div class="bar-label">Ollama Cleanup</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, Math.max(22, (ins.avg_llm_ms / 1000) * 100))}%">${ins.avg_llm_ms} ms</div></div>
+            <div class="bar-track"><div class="bar-fill" style="width:${llmPct}%"></div></div>
+            <div class="bar-value">${ins.avg_llm_ms} ms</div>
           </div>
           <div class="bar-row">
             <div class="bar-label">Total Pipeline</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, Math.max(28, ((ins.avg_stt_ms + ins.avg_llm_ms) / 1500) * 100))}%">${ins.avg_stt_ms + ins.avg_llm_ms} ms</div></div>
+            <div class="bar-track"><div class="bar-fill" style="width:${totPct}%"></div></div>
+            <div class="bar-value">${totalPipelineMs} ms</div>
           </div>
         </div>
 
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:baseline">
-            <h3 style="margin:0;font-size:17px">${ins.current_streak} day streak</h3>
-            <span style="font-size:11.5px;color:var(--text-muted)">LONGEST STREAK · ${ins.longest_streak} DAYS</span>
+          <div class="card-header-row">
+            <h3>${ins.current_streak} ${ins.current_streak === 1 ? "day" : "days"} streak</h3>
+            <span class="card-header-sub">LONGEST · ${ins.longest_streak} ${ins.longest_streak === 1 ? "DAY" : "DAYS"}</span>
           </div>
           <div class="heatmap-grid">${cells}</div>
         </div>
@@ -935,6 +943,15 @@ function bindScratchpadEvents() {
 
 /* ==================== SETTINGS MODAL ==================== */
 
+let modelsPollTimer = null;
+
+function stopModelsPolling() {
+  if (modelsPollTimer) {
+    clearInterval(modelsPollTimer);
+    modelsPollTimer = null;
+  }
+}
+
 async function openSettingsModal(stab = "general") {
   state.settingsTab = stab;
   state.resources = await api("/api/system/resources");
@@ -944,12 +961,20 @@ async function openSettingsModal(stab = "general") {
 }
 
 function closeSettingsModal() {
+  stopModelsPolling();
   $("#settings-modal").classList.add("hidden");
 }
 
 function renderSettingsContent() {
+  stopModelsPolling();
   $$(".settings-nav-item").forEach((el) => el.classList.toggle("active", el.dataset.stab === state.settingsTab));
-  const titles = { general: "General", system: "System", notetaker: "Notetaker", privacy: "Data & Privacy" };
+  const titles = {
+    general: "General",
+    models: "Speech Models",
+    system: "System",
+    notetaker: "Notetaker",
+    privacy: "Data & Privacy",
+  };
   $("#settings-title").textContent = titles[state.settingsTab] || "Settings";
 
   const cfg = state.appState.config;
@@ -960,6 +985,12 @@ function renderSettingsContent() {
     const micOpts = res.microphones
       .map((m) => `<option value="${esc(m.id)}" ${cfg.audio.device === m.id ? "selected" : ""}>${esc(m.name)}</option>`)
       .join("");
+    const installedWhisper = (res.whisper_models || []).filter((m) => m.installed);
+    const whisperOpts = installedWhisper.length
+      ? installedWhisper
+          .map((m) => `<option value="${esc(m.id)}" ${m.active ? "selected" : ""}>${esc(m.name)} (${esc(m.size_label)})</option>`)
+          .join("")
+      : `<option value="">No models downloaded</option>`;
     const ollamaOpts = res.ollama_models.length
       ? res.ollama_models
           .map((m) => `<option value="${esc(m.name)}" ${cfg.llm.model === m.name ? "selected" : ""}>${esc(m.name)} (${m.size_gb} GB)</option>`)
@@ -994,6 +1025,16 @@ function renderSettingsContent() {
           </div>
           <div class="setting-control">
             <select class="select" id="set-mic">${micOpts}</select>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">Speech Model (Whisper)</div>
+            <div class="setting-desc">Local GGML model running on whisper-server.</div>
+          </div>
+          <div class="setting-control" style="gap:8px;min-width:260px">
+            <select class="select" id="set-whisper">${whisperOpts}</select>
+            <button class="btn btn-secondary btn-sm" id="btn-goto-models" style="white-space:nowrap">More…</button>
           </div>
         </div>
         <div class="setting-row">
@@ -1056,10 +1097,133 @@ function renderSettingsContent() {
       }
     });
     $("#set-mic").addEventListener("change", (e) => saveSetting({ audio: { device: e.target.value } }));
+    $("#set-whisper").addEventListener("change", async (e) => {
+      if (!e.target.value) return;
+      await api("/api/models/select", { method: "POST", body: { id: e.target.value } });
+      state.resources = await api("/api/system/resources");
+      await refreshState();
+      toast("Switching Whisper model…");
+    });
+    $("#btn-goto-models").addEventListener("click", () => {
+      state.settingsTab = "models";
+      renderSettingsContent();
+    });
     $("#set-lang").addEventListener("change", (e) => saveSetting({ stt: { language: e.target.value } }));
     $("#set-llm-en").addEventListener("change", (e) => saveSetting({ llm: { enabled: e.target.checked } }));
     $("#set-ollama").addEventListener("change", (e) => saveSetting({ llm: { model: e.target.value } }));
     $("#set-theme").addEventListener("change", (e) => saveSetting({ ui: { theme: e.target.value } }));
+  } else if (state.settingsTab === "models") {
+    const models = res.whisper_models || [];
+    const anyDownloading = models.some((m) => m.downloading);
+
+    el.innerHTML = `
+      <p style="margin:0 0 14px;font-size:13px;color:var(--text-secondary)">
+        Download and switch between local Whisper GGML models. Smaller models run fast on CPU; Turbo and Large v3 shine on GPU.
+      </p>
+      <div class="model-list">
+        ${models
+          .map((m) => {
+            let actionHtml = "";
+            if (m.downloading) {
+              actionHtml = `<button class="btn btn-secondary btn-sm mdl-cancel" data-id="${esc(m.id)}">Cancel</button>`;
+            } else if (m.active) {
+              actionHtml = `<span class="model-badge active-pill">Active</span>`;
+            } else if (m.installed) {
+              actionHtml = `
+                <button class="btn btn-primary btn-sm mdl-use" data-id="${esc(m.id)}">Use</button>
+                <button class="btn btn-secondary btn-sm mdl-del" data-id="${esc(m.id)}" title="Delete model">✕</button>`;
+            } else {
+              actionHtml = `<button class="btn btn-secondary btn-sm mdl-dl" data-id="${esc(m.id)}">Download</button>`;
+            }
+
+            const progressHtml = m.downloading
+              ? `<div class="model-progress-wrap">
+                   <div class="model-progress-track"><div class="model-progress-fill" style="width:${m.progress}%"></div></div>
+                   <span class="model-progress-label">${m.progress}% · ${m.downloaded_mb} / ${m.total_mb} MB</span>
+                 </div>`
+              : m.error
+              ? `<div style="font-size:12px;color:var(--danger)">Download error: ${esc(m.error)}</div>`
+              : "";
+
+            return `
+              <div class="model-card ${m.active ? "active" : ""}">
+                <div class="model-card-top">
+                  <div>
+                    <div class="model-title-row">
+                      <span class="model-name">${esc(m.name)}</span>
+                      <span class="model-badge ${m.recommended ? "rec" : ""}">${esc(m.badge)}</span>
+                    </div>
+                    <div class="model-meta">${esc(m.size_label)} · ${esc(m.languages)} — ${esc(m.description)}</div>
+                  </div>
+                  <div class="model-actions">${actionHtml}</div>
+                </div>
+                ${progressHtml}
+              </div>`;
+          })
+          .join("")}
+      </div>`;
+
+    $$(".mdl-dl").forEach((b) =>
+      b.addEventListener("click", async () => {
+        try {
+          await api("/api/models/download", { method: "POST", body: { id: b.dataset.id } });
+          state.resources = await api("/api/system/resources");
+          renderSettingsContent();
+          toast("Download started");
+        } catch (err) {
+          toast(err.message);
+        }
+      })
+    );
+    $$(".mdl-cancel").forEach((b) =>
+      b.addEventListener("click", async () => {
+        await api("/api/models/cancel", { method: "POST", body: { id: b.dataset.id } });
+        state.resources = await api("/api/system/resources");
+        renderSettingsContent();
+        toast("Download cancelled");
+      })
+    );
+    $$(".mdl-use").forEach((b) =>
+      b.addEventListener("click", async () => {
+        try {
+          await api("/api/models/select", { method: "POST", body: { id: b.dataset.id } });
+          state.resources = await api("/api/system/resources");
+          await refreshState();
+          renderSettingsContent();
+          toast("Switching Whisper model…");
+        } catch (err) {
+          toast(err.message);
+        }
+      })
+    );
+    $$(".mdl-del").forEach((b) =>
+      b.addEventListener("click", async () => {
+        try {
+          await api(`/api/models/${encodeURIComponent(b.dataset.id)}`, { method: "DELETE" });
+          state.resources = await api("/api/system/resources");
+          renderSettingsContent();
+          toast("Model deleted");
+        } catch (err) {
+          toast(err.message);
+        }
+      })
+    );
+
+    if (anyDownloading) {
+      modelsPollTimer = setInterval(async () => {
+        try {
+          const data = await api("/api/models");
+          if (state.resources) state.resources.whisper_models = data.items;
+          if (state.settingsTab === "models" && !$("#settings-modal").classList.contains("hidden")) {
+            renderSettingsContent();
+          } else {
+            stopModelsPolling();
+          }
+        } catch {
+          stopModelsPolling();
+        }
+      }, 600);
+    }
   } else if (state.settingsTab === "system") {
     const pasteOpts = [
       ["shift_insert", "Shift + Insert (GUI & Terminals)"],

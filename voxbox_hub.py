@@ -22,8 +22,8 @@ from gi.repository import Gdk, Gtk, WebKit2
 class VoxBoxHubWindow(Gtk.Window):
     def __init__(self, url: str) -> None:
         super().__init__(title="VoxBox")
-        self.set_default_size(1160, 760)
-        self.set_size_request(860, 580)
+        self.set_default_size(1280, 760)
+        self.set_size_request(940, 600)
         self.set_position(Gtk.WindowPosition.CENTER)
 
         # Dark background color to prevent any white flash before CSS loads
