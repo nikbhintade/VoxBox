@@ -189,20 +189,22 @@ function renderDictationView() {
         historyHtml += `
           <div class="history-item">
             <div class="history-time">${esc(formatTime(it.created_at))}</div>
-            <div>
+            <div class="history-body">
               <div class="history-text">${esc(it.cleaned_text)}</div>
-              <div class="history-meta">
-                <span>${it.word_count} words</span>
-                <span>STT ${it.stt_ms}ms</span>
-                ${it.llm_ms ? `<span>Ollama ${it.llm_ms}ms</span>` : ""}
-                ${it.transform_name ? `<span>Transform: ${esc(it.transform_name)}</span>` : ""}
-              </div>
               ${showRaw ? `<div class="history-raw"><strong>Raw Whisper:</strong> ${esc(it.raw_text)}</div>` : ""}
-            </div>
-            <div class="history-actions">
-              <button class="btn btn-secondary btn-sm act-copy" data-id="${it.id}">Copy</button>
-              <button class="btn btn-secondary btn-sm act-raw" data-id="${it.id}">${showRaw ? "Hide raw" : "Raw"}</button>
-              <button class="btn btn-secondary btn-sm act-del" data-id="${it.id}">✕</button>
+              <div class="history-footer">
+                <div class="history-meta">
+                  <span>${it.word_count} ${it.word_count === 1 ? "word" : "words"}</span>
+                  <span>STT ${it.stt_ms}ms</span>
+                  ${it.llm_ms ? `<span>Ollama ${it.llm_ms}ms</span>` : ""}
+                  ${it.transform_name ? `<span>Transform: ${esc(it.transform_name)}</span>` : ""}
+                </div>
+                <div class="history-actions">
+                  <button class="btn btn-secondary btn-sm act-copy" data-id="${it.id}">Copy</button>
+                  <button class="btn btn-secondary btn-sm act-raw" data-id="${it.id}">${showRaw ? "Hide raw" : "Raw"}</button>
+                  <button class="btn btn-secondary btn-sm act-del" data-id="${it.id}" title="Delete">✕</button>
+                </div>
+              </div>
             </div>
           </div>`;
       }
@@ -215,23 +217,16 @@ function renderDictationView() {
       <div class="page-header">
         <h1 class="page-title">Welcome back${name}</h1>
       </div>
-      <div class="home-grid">
-        <div>
-          <div class="hero-banner">
-            <h2>Make VoxBox sound like <em>you</em></h2>
-            <p>100% offline GPU transcription with local Ollama cleanup. Hold <strong>${esc(state.appState.hotkey_label)}</strong> anywhere to dictate into apps or terminals.</p>
-            <button class="btn hero-cta" id="btn-hero-style">Customize style</button>
-          </div>
-          <div class="search-row">
-            <span style="font-weight:600;font-size:13.5px;color:var(--text-secondary)">Recent Dictations</span>
-            <input class="input search-input" id="dictation-search" placeholder="Search transcripts…" value="${esc(state.searchDictation)}" />
-          </div>
-          ${historyHtml}
+      <div class="home-top-grid">
+        <div class="hero-banner">
+          <h2>Make VoxBox sound like <em>you</em></h2>
+          <p>100% offline GPU transcription with local Ollama cleanup. Hold <strong>${esc(state.appState.hotkey_label)}</strong> anywhere to dictate into apps or terminals.</p>
+          <div><button class="btn hero-cta" id="btn-hero-style">Customize style</button></div>
         </div>
         <aside class="stats-rail">
           <div class="stat-row"><span class="stat-num">${fmtWords(ins.total_words)}</span><span class="stat-label">total words</span></div>
           <div class="stat-row"><span class="stat-num">${ins.wpm}</span><span class="stat-label">wpm</span></div>
-          <div class="stat-row"><span class="stat-num">${ins.current_streak}</span><span class="stat-label">day streak</span></div>
+          <div class="stat-row"><span class="stat-num">${ins.current_streak}</span><span class="stat-label">${ins.current_streak === 1 ? "day" : "days"} streak</span></div>
           <div class="stat-divider"></div>
           <div style="font-size:12.5px;color:var(--text-secondary)">
             <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px">Local Pipeline</div>
@@ -241,6 +236,11 @@ function renderDictationView() {
           </div>
         </aside>
       </div>
+      <div class="search-row">
+        <span class="search-row-label">Recent Dictations</span>
+        <input class="input search-input" id="dictation-search" placeholder="Search transcripts…" value="${esc(state.searchDictation)}" />
+      </div>
+      ${historyHtml}
     </div>`;
 }
 

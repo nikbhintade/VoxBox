@@ -417,11 +417,19 @@ html, body {
 }
 
 /* Dictation Home Layout */
-.home-grid {
+.home-top-grid {
   display: grid;
-  grid-template-columns: 1fr 236px;
-  gap: 24px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 236px;
+  gap: 20px;
+  align-items: stretch;
+  margin-bottom: 24px;
+}
+
+.home-top-grid .hero-banner {
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .stats-rail {
@@ -429,13 +437,14 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 18px 20px;
+  min-width: 0;
 }
 
 .stat-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 5px 0;
+  padding: 4px 0;
 }
 
 .stat-num {
@@ -453,7 +462,7 @@ html, body {
 .stat-divider {
   height: 1px;
   background: var(--border);
-  margin: 14px 0;
+  margin: 12px 0;
 }
 
 .search-row {
@@ -462,6 +471,13 @@ html, body {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.search-row-label {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .search-input {
@@ -488,9 +504,9 @@ html, body {
 
 .history-item {
   display: grid;
-  grid-template-columns: 74px 1fr auto;
+  grid-template-columns: 68px minmax(0, 1fr);
   gap: 14px;
-  padding: 15px 18px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--border-subtle);
   align-items: start;
 }
@@ -501,17 +517,31 @@ html, body {
   font-size: 12px;
   color: var(--text-muted);
   padding-top: 2px;
+  white-space: nowrap;
+}
+
+.history-body {
+  min-width: 0;
 }
 
 .history-text {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 13.8px;
+  font-size: 14px;
+  line-height: 1.58;
   color: var(--text-primary);
 }
 
+.history-footer {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .history-meta {
-  margin-top: 6px;
   font-size: 11.5px;
   color: var(--text-muted);
   display: flex;
@@ -520,8 +550,8 @@ html, body {
 }
 
 .history-raw {
-  margin-top: 8px;
-  padding: 8px 10px;
+  margin-top: 10px;
+  padding: 9px 12px;
   border-radius: 8px;
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -531,8 +561,8 @@ html, body {
 
 .history-actions {
   display: flex;
-  gap: 4px;
-  opacity: 0.72;
+  gap: 6px;
+  opacity: 0.78;
 }
 .history-item:hover .history-actions { opacity: 1; }
 
@@ -1090,7 +1120,7 @@ html, body {
 }
 
 @media (max-width: 860px) {
-  .home-grid, .insights-top, .cards-grid {
+  .home-top-grid, .insights-top, .cards-grid {
     grid-template-columns: 1fr;
   }
 }
