@@ -26,9 +26,9 @@ class VoxBoxHubWindow(Gtk.Window):
         self.set_size_request(940, 600)
         self.set_position(Gtk.WindowPosition.CENTER)
 
-        # Dark background color to prevent any white flash before CSS loads
+        # Match dark graphite window background to prevent any flash before CSS loads
         rgba = Gdk.RGBA()
-        rgba.parse("#0e0f12")
+        rgba.parse("#141416")
 
         webview = WebKit2.WebView()
         webview.set_background_color(rgba)

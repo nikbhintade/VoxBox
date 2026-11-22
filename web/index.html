@@ -8,134 +8,163 @@
 </head>
 <body>
   <div class="app-shell">
-    <!-- Sidebar -->
-    <aside class="sidebar">
+    <!-- macOS Source-List Sidebar -->
+    <aside class="sidebar" aria-label="Primary Navigation">
       <div class="sidebar-top">
         <div class="brand">
-          <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <rect x="3.5" y="9" width="2.6" height="6" rx="1.3" fill="currentColor" />
-            <rect x="8.2" y="4.5" width="2.6" height="15" rx="1.3" fill="currentColor" />
-            <rect x="12.9" y="7" width="2.6" height="10" rx="1.3" fill="currentColor" />
-            <rect x="17.6" y="10" width="2.6" height="4" rx="1.3" fill="currentColor" />
-          </svg>
+          <div class="brand-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+              <rect x="3.5" y="9.5" width="2.4" height="5" rx="1.2" fill="currentColor" />
+              <rect x="8.2" y="5" width="2.4" height="14" rx="1.2" fill="currentColor" />
+              <rect x="12.9" y="7.5" width="2.4" height="9" rx="1.2" fill="currentColor" />
+              <rect x="17.6" y="10" width="2.4" height="4" rx="1.2" fill="currentColor" />
+            </svg>
+          </div>
           <span class="brand-name">VoxBox</span>
-          <span class="brand-badge">Local</span>
         </div>
 
         <nav class="nav" id="sidebar-nav">
+          <div class="nav-section">Workspace</div>
           <button class="nav-item active" data-tab="dictation">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3m-3 0h6"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21m-3 0h6"/></svg>
             <span>Dictation</span>
           </button>
+          <button class="nav-item" data-tab="scratchpad">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M15 3v5h5M8 13h8M8 17h5"/></svg>
+            <span>Scratchpad</span>
+          </button>
           <button class="nav-item" data-tab="notetaker">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
             <span>Notetaker</span>
-            <span class="nav-pill">Soon</span>
+            <span class="nav-badge">Soon</span>
           </button>
-          <button class="nav-item" data-tab="insights">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="13" width="4" height="7" rx="1"/><rect x="10" y="9" width="4" height="11" rx="1"/><rect x="16" y="4" width="4" height="16" rx="1"/></svg>
-            <span>Insights</span>
-          </button>
+
+          <div class="nav-section">Intelligence</div>
           <button class="nav-item" data-tab="dictionary">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v18H6.5A2.5 2.5 0 0 1 4 18.5z"/><path d="M8 7h7M8 11h5"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 5.5A2.5 2.5 0 0 1 7 3h12.5v18H7a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M8.5 7.5h7M8.5 11.5h5"/></svg>
             <span>Dictionary</span>
           </button>
           <button class="nav-item" data-tab="snippets">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M20 5L8.2 15.2M20 19L12.5 12.5M8.2 8.8L11 11.2"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>
             <span>Snippets</span>
           </button>
           <button class="nav-item" data-tab="style">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h10M9 6v12M14 11h6M17 11v7"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M9 6v12M14 11h6M17 11v7"/></svg>
             <span>Style</span>
           </button>
           <button class="nav-item" data-tab="transforms">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 4l5 5L8 21H3v-5L15 4z"/><path d="M5 4v3M3.5 5.5h3M18 14v3M16.5 15.5h3"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4.5l5 5L8.5 20.5H3.5v-5z"/><path d="M12 7l5 5"/></svg>
             <span>Transforms</span>
           </button>
-          <button class="nav-item" data-tab="scratchpad">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-            <span>Scratchpad</span>
+
+          <div class="nav-section">Activity</div>
+          <button class="nav-item" data-tab="insights">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><rect x="5.5" y="12" width="3" height="7" rx="1"/><rect x="10.5" y="8" width="3" height="11" rx="1"/><rect x="15.5" y="4.5" width="3" height="14.5" rx="1"/></svg>
+            <span>Insights</span>
           </button>
         </nav>
       </div>
 
-      <div class="sidebar-bottom">
-        <div class="engine-card" id="engine-status-card">
-          <div class="engine-row">
-            <span class="status-dot ready" id="status-dot"></span>
-            <span class="engine-title" id="status-text">Ready</span>
+      <div class="sidebar-footer">
+        <div class="sidebar-status" id="sidebar-status">
+          <span class="status-dot ready" id="status-dot"></span>
+          <div class="sidebar-status-copy">
+            <div class="sidebar-status-title" id="status-text">Ready</div>
+            <div class="sidebar-status-sub" id="status-sub">CUDA · Ollama</div>
           </div>
-          <div class="engine-sub" id="status-sub">Hold Right Ctrl to dictate</div>
         </div>
-
-        <button class="nav-item" id="btn-open-settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <button class="nav-item" id="btn-open-settings" title="Settings (Ctrl+,)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>Settings</span>
+          <span class="kbd-hint">Ctrl+,</span>
         </button>
       </div>
     </aside>
 
-    <!-- Main Surface -->
-    <div class="main-wrap">
-      <header class="topbar">
-        <div class="topbar-left">
-          <span class="hotkey-chip" id="topbar-hotkey-chip">Hold <strong>Right Ctrl</strong></span>
+    <!-- Unified Detail Column -->
+    <div class="detail-column">
+      <header class="toolbar">
+        <div class="toolbar-leading">
+          <h1 class="toolbar-title" id="toolbar-title">Dictation</h1>
+          <span class="toolbar-subtitle" id="toolbar-subtitle"></span>
         </div>
-        <div class="topbar-right">
-          <button class="icon-btn" id="btn-dictate-now" title="Start / Stop Dictation">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+
+        <div class="toolbar-trailing">
+          <div class="toolbar-extra" id="toolbar-extra"></div>
+          <button class="record-btn" id="btn-dictate-now" title="Click to start/stop dictation, or hold your global hotkey anywhere">
+            <span class="record-dot" id="record-dot"></span>
+            <span class="record-label" id="record-label">Dictate</span>
+            <kbd class="record-kbd" id="record-kbd">Right Ctrl</kbd>
           </button>
-          <button class="icon-btn" id="btn-theme-toggle" title="Toggle Dark / Light Theme">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          </button>
-          <button class="icon-btn" id="btn-topbar-settings" title="Settings">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <button class="icon-btn" id="btn-theme-toggle" title="Switch Appearance (Dark / Light)" aria-label="Toggle appearance">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           </button>
         </div>
       </header>
 
-      <main class="canvas" id="main-canvas">
-        <!-- Dynamically rendered views -->
-      </main>
+      <main class="workspace" id="main-canvas"></main>
     </div>
   </div>
 
-  <!-- Settings Modal -->
+  <!-- macOS System Settings Sheet -->
   <div class="modal-backdrop hidden" id="settings-modal">
-    <div class="settings-dialog" role="dialog" aria-modal="true">
-      <aside class="settings-nav">
-        <div class="settings-nav-label">SETTINGS</div>
-        <button class="settings-nav-item active" data-stab="general">General</button>
-        <button class="settings-nav-item" data-stab="models">Speech Models</button>
-        <button class="settings-nav-item" data-stab="llm">AI Cleanup</button>
-        <button class="settings-nav-item" data-stab="system">System</button>
-        <button class="settings-nav-item" data-stab="notetaker">Notetaker</button>
-        <button class="settings-nav-item" data-stab="privacy">Data &amp; Privacy</button>
-        <div class="settings-version">VoxBox v0.2.0 · 100% Local</div>
+    <div class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <aside class="settings-sidebar">
+        <div class="settings-sidebar-heading">Settings</div>
+        <button class="settings-nav-item active" data-stab="general">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.2" fill="var(--bg-sidebar)"/><circle cx="15" cy="17" r="2.2" fill="var(--bg-sidebar)"/></svg>
+          <span>General</span>
+        </button>
+        <button class="settings-nav-item" data-stab="models">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M8 7v10M4 10v4M16 7v10M20 10v4"/></svg>
+          <span>Speech Models</span>
+        </button>
+        <button class="settings-nav-item" data-stab="llm">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+          <span>AI Cleanup</span>
+        </button>
+        <button class="settings-nav-item" data-stab="system">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+          <span>System</span>
+        </button>
+        <button class="settings-nav-item" data-stab="notetaker">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
+          <span>Notetaker</span>
+        </button>
+        <button class="settings-nav-item" data-stab="privacy">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.5-7 10-3.8-1.5-7-5-7-10V6l7-3z"/></svg>
+          <span>Data &amp; Privacy</span>
+        </button>
+        <div class="settings-version">VoxBox 0.2 · Offline First</div>
       </aside>
-      <section class="settings-body">
-        <div class="settings-header">
-          <h2 class="serif-title" id="settings-title">General</h2>
-          <button class="icon-btn" id="btn-close-settings" title="Close">✕</button>
+
+      <section class="settings-main">
+        <div class="settings-main-header">
+          <h2 id="settings-title">General</h2>
+          <button class="icon-btn" id="btn-close-settings" title="Close (Esc)" aria-label="Close settings">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
         </div>
-        <div class="settings-content" id="settings-content"></div>
+        <div class="settings-scroll" id="settings-content"></div>
       </section>
     </div>
   </div>
 
-  <!-- Generic Input Modal (Add Word / Snippet / Transform / Import) -->
+  <!-- Clean Sheet Dialog (Import / Edit Transform / Try Transform / Confirm) -->
   <div class="modal-backdrop hidden" id="form-modal">
-    <div class="form-dialog" role="dialog" aria-modal="true">
-      <div class="settings-header">
-        <h3 class="serif-title" id="form-modal-title">Add Item</h3>
-        <button class="icon-btn" id="btn-close-form">✕</button>
+    <div class="sheet-dialog" role="dialog" aria-modal="true" aria-labelledby="form-modal-title">
+      <div class="sheet-dialog-header">
+        <h3 id="form-modal-title">Dialog</h3>
+        <button class="icon-btn" id="btn-close-form" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </div>
-      <div id="form-modal-body"></div>
+      <div class="sheet-dialog-body" id="form-modal-body"></div>
     </div>
   </div>
 
-  <!-- Toast -->
-  <div class="toast hidden" id="toast"></div>
+  <!-- Minimal Status Toast -->
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
 
   <script src="/app.js"></script>
 </body>

@@ -1,4 +1,4 @@
-/* VoxBox Hub Frontend */
+/* VoxBox Hub — Apple Human Interface Frontend */
 
 const state = {
   tab: "dictation",
@@ -11,12 +11,15 @@ const state = {
   transforms: [],
   notes: [],
   resources: null,
+  llmCatalog: null,
   activeNoteId: null,
+  editingDictationId: null,
+  expandedRawIds: new Set(),
   searchDictation: "",
   searchDict: "",
   searchSnippets: "",
   searchNotes: "",
-  expandedRawIds: new Set(),
+  recStartedAt: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -59,6 +62,18 @@ function fmtWords(n) {
   return String(n);
 }
 
+function downloadTextFile(filename, content) {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function formatDayGroup(ts) {
   const d = new Date(ts * 1000);
   const now = new Date();
@@ -67,40 +82,79 @@ function formatDayGroup(ts) {
   const diffDays = Math.round((startToday - startDay) / 86400000);
   if (diffDays === 0) return "Today";
   if (diffDays === 1) return "Yesterday";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+  });
 }
 
 function formatTime(ts) {
-  return new Date(ts * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }).toLowerCase();
+  return new Date(ts * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function formatElapsed(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/* ==================== LIVE STATE & TOOLBAR ==================== */
+
+function updateLiveControls() {
+  if (!state.appState) return;
+  const cfg = state.appState.config;
+  const st = state.appState.state || "idle";
+  const hk = state.appState.hotkey_label || "Right Ctrl";
+
+  const dot = $("#status-dot");
+  dot.className = `status-dot ${st}`;
+  $("#status-text").textContent =
+    st === "recording" ? "Recording" : st === "processing" ? "Transcribing" : st === "error" ? "Error" : "Ready";
+  const llmText = cfg.llm.enabled
+    ? `${state.appState.llm_provider_label} · ${state.appState.llm_active_model}`
+    : "Raw Whisper";
+  $("#status-sub").textContent = llmText;
+
+  const recBtn = $("#btn-dictate-now");
+  const recLabel = $("#record-label");
+  const recKbd = $("#record-kbd");
+
+  recBtn.classList.toggle("is-recording", st === "recording");
+  recBtn.classList.toggle("is-processing", st === "processing");
+
+  if (st === "recording") {
+    if (!state.recStartedAt) state.recStartedAt = Date.now();
+    const sec = (Date.now() - state.recStartedAt) / 1000;
+    recLabel.textContent = "Stop";
+    recKbd.textContent = formatElapsed(sec);
+  } else if (st === "processing") {
+    state.recStartedAt = null;
+    recLabel.textContent = "Polishing…";
+    recKbd.textContent = "GPU";
+  } else {
+    state.recStartedAt = null;
+    recLabel.textContent = "Dictate";
+    recKbd.textContent = hk;
+  }
 }
 
 async function refreshState() {
   state.appState = await api("/api/state");
-  const cfg = state.appState.config;
-  applyTheme(cfg.ui.theme || "dark");
-
-  const hk = state.appState.hotkey_label || "Right Ctrl";
-  $("#topbar-hotkey-chip").innerHTML = `Hold <strong>${esc(hk)}</strong>`;
-
-  const dot = $("#status-dot");
-  dot.className = `status-dot ${state.appState.state || "ready"}`;
-  const st = state.appState.state;
-  $("#status-text").textContent =
-    st === "recording" ? "Listening…" : st === "processing" ? "Polishing…" : st === "error" ? "Error" : "Ready";
-  const llmLabel = cfg.llm.enabled
-    ? `${state.appState.llm_provider_label || cfg.llm.provider} · ${state.appState.llm_active_model || cfg.llm.model}`
-    : "Raw STT";
-  $("#status-sub").textContent = `Hold ${hk} · ${llmLabel}`;
+  applyTheme(state.appState.config.ui.theme || "dark");
+  updateLiveControls();
 }
 
 async function loadTabData(tab) {
   if (tab === "dictation") {
-    const [d, ins] = await Promise.all([
+    const [d, ins, tr] = await Promise.all([
       api(`/api/dictations?q=${encodeURIComponent(state.searchDictation)}`),
       api("/api/insights"),
+      api("/api/transforms"),
     ]);
     state.dictations = d.items;
     state.insights = ins;
+    state.transforms = tr.items;
   } else if (tab === "insights") {
     state.insights = await api("/api/insights");
   } else if (tab === "dictionary") {
@@ -110,63 +164,105 @@ async function loadTabData(tab) {
   } else if (tab === "transforms") {
     state.transforms = (await api("/api/transforms")).items;
   } else if (tab === "scratchpad") {
-    state.notes = (await api(`/api/scratchpad?q=${encodeURIComponent(state.searchNotes)}`)).items;
+    const [notesRes, trRes] = await Promise.all([
+      api(`/api/scratchpad?q=${encodeURIComponent(state.searchNotes)}`),
+      api("/api/transforms"),
+    ]);
+    state.notes = notesRes.items;
+    state.transforms = trRes.items;
+    if (state.activeNoteId === null && state.notes.length > 0) {
+      state.activeNoteId = state.notes[0].id;
+    }
   }
 }
 
 async function switchTab(tab) {
   if (tab === "settings") {
-    await openSettingsModal();
+    await openSettingsModal("general");
     return;
   }
   state.tab = tab;
+  state.editingDictationId = null;
   $$("#sidebar-nav .nav-item").forEach((el) => el.classList.toggle("active", el.dataset.tab === tab));
   await loadTabData(tab);
-  renderCanvas();
+  renderCurrentView();
 }
 
-function renderCanvas() {
+function setToolbar(title, subtitle = "", extraHtml = "") {
+  $("#toolbar-title").textContent = title;
+  $("#toolbar-subtitle").textContent = subtitle;
+  $("#toolbar-extra").innerHTML = extraHtml;
+}
+
+function renderCurrentView() {
   const root = $("#main-canvas");
+  root.classList.toggle("flush", state.tab === "scratchpad");
+
   switch (state.tab) {
     case "dictation":
-      root.innerHTML = renderDictationView();
-      bindDictationEvents();
-      break;
-    case "notetaker":
-      root.innerHTML = renderNotetakerView();
-      break;
-    case "insights":
-      root.innerHTML = renderInsightsView();
-      break;
-    case "dictionary":
-      root.innerHTML = renderDictionaryView();
-      bindDictionaryEvents();
-      break;
-    case "snippets":
-      root.innerHTML = renderSnippetsView();
-      bindSnippetsEvents();
-      break;
-    case "style":
-      root.innerHTML = renderStyleView();
-      bindStyleEvents();
-      break;
-    case "transforms":
-      root.innerHTML = renderTransformsView();
-      bindTransformsEvents();
+      renderDictationView(root);
       break;
     case "scratchpad":
-      root.innerHTML = renderScratchpadView();
-      bindScratchpadEvents();
+      renderScratchpadView(root);
+      break;
+    case "notetaker":
+      renderNotetakerView(root);
+      break;
+    case "dictionary":
+      renderDictionaryView(root);
+      break;
+    case "snippets":
+      renderSnippetsView(root);
+      break;
+    case "style":
+      renderStyleView(root);
+      break;
+    case "transforms":
+      renderTransformsView(root);
+      break;
+    case "insights":
+      renderInsightsView(root);
       break;
   }
 }
 
-/* ==================== DICTATION HOME ==================== */
+/* ==================== 1. DICTATION ==================== */
 
-function renderDictationView() {
-  const cfg = state.appState.config;
+function renderDictationView(root) {
   const ins = state.insights || { total_words: 0, wpm: 0, current_streak: 0, avg_stt_ms: 0, avg_llm_ms: 0 };
-  const name = cfg.ui.user_name ? `, ${esc(cfg.ui.user_name)}` : "";
+  const st = state.appState.state || "idle";
+  const countLbl = state.dictations.length
+    ? `${state.dictations.length} ${state.dictations.length === 1 ? "entry" : "entries"}`
+    : "";
+
+  setToolbar(
+    "Dictation",
+    countLbl,
+    `<div class="search-field">
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+       <input class="input" id="dictation-search" placeholder="Search" value="${esc(state.searchDictation)}" />
+     </div>`
+  );
+
+  let liveBanner = "";
+  if (st === "recording") {
+    liveBanner = `
+      <div class="live-banner">
+        <div class="live-banner-left">
+          <span class="status-dot recording"></span>
+          <span>Listening to microphone… Release <strong>${esc(state.appState.hotkey_label)}</strong> when finished, or press Esc to cancel.</span>
+        </div>
+        <button class="btn btn-sm btn-danger" id="btn-banner-stop">Stop</button>
+      </div>`;
+  } else if (st === "processing") {
+    liveBanner = `
+      <div class="live-banner processing">
+        <div class="live-banner-left">
+          <span class="status-dot processing"></span>
+          <span>Transcribing on GPU and polishing text…</span>
+        </div>
+      </div>`;
+  }
 
   const groups = new Map();
   for (const item of state.dictations) {
@@ -175,496 +271,613 @@ function renderDictationView() {
     groups.get(g).push(item);
   }
 
-  let historyHtml = "";
+  let feedHtml = "";
   if (state.dictations.length === 0) {
-    historyHtml = `
-      <div class="history-card">
+    feedHtml = `
+      <div class="inset-group">
         <div class="empty-state">
-          <h4>No dictations yet</h4>
-          <p>Hold <strong>${esc(state.appState.hotkey_label)}</strong> anywhere on your desktop, speak, and release. Your history will appear here.</p>
+          <h4>${state.searchDictation ? "No matching transcripts" : "Ready to transcribe"}</h4>
+          <p>${
+            state.searchDictation
+              ? "Try a different search term."
+              : `Hold <strong>${esc(state.appState.hotkey_label)}</strong> anywhere on your desktop—or click <strong>Dictate</strong> above—to speak and paste cleaned text automatically.`
+          }</p>
         </div>
       </div>`;
   } else {
     for (const [label, items] of groups.entries()) {
-      historyHtml += `<div class="date-heading">${esc(label)}</div><div class="history-card">`;
+      feedHtml += `<div class="date-section-label">${esc(label)}</div><div class="inset-group">`;
       for (const it of items) {
         const showRaw = state.expandedRawIds.has(it.id);
-        historyHtml += `
-          <div class="history-item">
-            <div class="history-time">${esc(formatTime(it.created_at))}</div>
-            <div class="history-body">
-              <div class="history-text">${esc(it.cleaned_text)}</div>
-              ${showRaw ? `<div class="history-raw"><strong>Raw Whisper:</strong> ${esc(it.raw_text)}</div>` : ""}
-              <div class="history-footer">
-                <div class="history-meta">
+        const editing = state.editingDictationId === it.id;
+        feedHtml += `
+          <article class="transcript-row ${editing ? "is-editing" : ""}">
+            <div class="transcript-time">${esc(formatTime(it.created_at))}</div>
+            <div class="transcript-body">
+              ${
+                editing
+                  ? `<textarea class="transcript-editor" id="edit-ta-${it.id}">${esc(it.cleaned_text)}</textarea>`
+                  : `<div class="transcript-text">${esc(it.cleaned_text)}</div>`
+              }
+              ${
+                showRaw
+                  ? `<div class="transcript-raw"><div class="transcript-raw-label">Raw Speech Recognition</div>${esc(it.raw_text)}</div>`
+                  : ""
+              }
+              <div class="transcript-footer">
+                <div class="transcript-meta">
                   <span>${it.word_count} ${it.word_count === 1 ? "word" : "words"}</span>
-                  <span>STT ${it.stt_ms}ms</span>
-                  ${it.llm_ms ? `<span>Ollama ${it.llm_ms}ms</span>` : ""}
-                  ${it.transform_name ? `<span>Transform: ${esc(it.transform_name)}</span>` : ""}
+                  <span>·</span>
+                  <span>STT ${it.stt_ms} ms</span>
+                  ${it.llm_ms ? `<span>·</span><span>AI ${it.llm_ms} ms</span>` : ""}
+                  ${it.transform_name ? `<span>·</span><span>${esc(it.transform_name)}</span>` : ""}
                 </div>
-                <div class="history-actions">
-                  <button class="btn btn-secondary btn-sm act-copy" data-id="${it.id}">Copy</button>
-                  <button class="btn btn-secondary btn-sm act-raw" data-id="${it.id}">${showRaw ? "Hide raw" : "Raw"}</button>
-                  <button class="btn btn-secondary btn-sm act-del" data-id="${it.id}" title="Delete">✕</button>
+                <div class="transcript-actions">
+                  ${
+                    editing
+                      ? `<button class="btn btn-ghost btn-sm act-edit-cancel" data-id="${it.id}">Cancel</button>
+                         <button class="btn btn-primary btn-sm act-edit-save" data-id="${it.id}">Save</button>`
+                      : `<button class="action-chip act-copy" data-id="${it.id}">Copy</button>
+                         <button class="action-chip act-edit" data-id="${it.id}">Edit</button>
+                         <button class="action-chip act-raw" data-id="${it.id}">${showRaw ? "Hide Raw" : "Raw"}</button>
+                         <button class="action-chip act-export" data-id="${it.id}">Export</button>
+                         <button class="action-chip danger act-del" data-id="${it.id}">Delete</button>`
+                  }
                 </div>
               </div>
             </div>
-          </div>`;
+          </article>`;
       }
-      historyHtml += `</div>`;
+      feedHtml += `</div>`;
     }
   }
 
-  return `
-    <div class="page-container">
-      <div class="page-header">
-        <h1 class="page-title">Welcome back${name}</h1>
-      </div>
-      <div class="home-top-grid">
-        <div class="hero-banner">
-          <h2>Make VoxBox sound like <em>you</em></h2>
-          <p>100% offline GPU transcription with local Ollama cleanup. Hold <strong>${esc(state.appState.hotkey_label)}</strong> anywhere to dictate into apps or terminals.</p>
-          <div><button class="btn hero-cta" id="btn-hero-style">Customize style</button></div>
+  root.innerHTML = `
+    <div class="page">
+      ${liveBanner}
+      <div class="whisper-metrics">
+        <div class="whisper-metrics-group">
+          <span class="whisper-metric"><strong>${fmtWords(ins.total_words)}</strong> words</span>
+          <span class="whisper-metric"><strong>${ins.wpm}</strong> wpm</span>
+          <span class="whisper-metric"><strong>${ins.current_streak}</strong> ${ins.current_streak === 1 ? "day" : "days"} streak</span>
         </div>
-        <aside class="stats-rail">
-          <div class="stat-row"><span class="stat-num">${fmtWords(ins.total_words)}</span><span class="stat-label">total words</span></div>
-          <div class="stat-row"><span class="stat-num">${ins.wpm}</span><span class="stat-label">wpm</span></div>
-          <div class="stat-row"><span class="stat-num">${ins.current_streak}</span><span class="stat-label">${ins.current_streak === 1 ? "day" : "days"} streak</span></div>
-          <div class="stat-divider"></div>
-          <div style="font-size:12.5px;color:var(--text-secondary)">
-            <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px">Active Pipeline</div>
-            <div>CUDA STT · ~${ins.avg_stt_ms || 150}ms</div>
-            <div>${cfg.llm.enabled ? `${esc(state.appState.llm_provider_label)} (${esc(state.appState.llm_active_model)})` : "AI Cleanup Off"} · ~${ins.avg_llm_ms || 400}ms</div>
-            <div style="margin-top:6px;color:var(--accent)">Style: ${esc(cfg.llm.active_style)}</div>
-          </div>
-        </aside>
+        <div class="whisper-metrics-group">
+          <span class="whisper-metric">CUDA ${ins.avg_stt_ms || 0} ms</span>
+          <span class="whisper-metric">${esc(state.appState.llm_provider_label)} ${ins.avg_llm_ms || 0} ms</span>
+        </div>
       </div>
-      <div class="search-row">
-        <span class="search-row-label">Recent Dictations</span>
-        <input class="input search-input" id="dictation-search" placeholder="Search transcripts…" value="${esc(state.searchDictation)}" />
-      </div>
-      ${historyHtml}
+      ${feedHtml}
     </div>`;
-}
 
-function bindDictationEvents() {
-  $("#btn-hero-style")?.addEventListener("click", () => switchTab("style"));
-  let timer = null;
+  // Bind events
+  let searchTimer = null;
   $("#dictation-search")?.addEventListener("input", (e) => {
     state.searchDictation = e.target.value;
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
       await loadTabData("dictation");
-      renderCanvas();
+      renderCurrentView();
       const inp = $("#dictation-search");
-      if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
-    }, 180);
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }, 160);
   });
-  $$(".act-copy").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      const it = state.dictations.find((x) => x.id === Number(btn.dataset.id));
-      if (it) { await api("/api/copy", { method: "POST", body: { text: it.cleaned_text } }); toast("Copied to clipboard"); }
+
+  $("#btn-banner-stop")?.addEventListener("click", async () => {
+    await api("/api/dictate/toggle", { method: "POST" });
+    await refreshState();
+    renderCurrentView();
+  });
+
+  $$(".act-copy").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const it = state.dictations.find((x) => x.id === Number(b.dataset.id));
+      if (it) {
+        await api("/api/copy", { method: "POST", body: { text: it.cleaned_text } });
+        toast("Copied to clipboard");
+      }
     })
   );
-  $$(".act-raw").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const id = Number(btn.dataset.id);
+
+  $$(".act-edit").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.editingDictationId = Number(b.dataset.id);
+      renderCurrentView();
+      const ta = $(`#edit-ta-${state.editingDictationId}`);
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+      }
+    })
+  );
+
+  $$(".act-edit-cancel").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.editingDictationId = null;
+      renderCurrentView();
+    })
+  );
+
+  $$(".act-edit-save").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const id = Number(b.dataset.id);
+      const ta = $(`#edit-ta-${id}`);
+      if (!ta) return;
+      await api(`/api/dictations/${id}`, { method: "PATCH", body: { cleaned_text: ta.value } });
+      state.editingDictationId = null;
+      await loadTabData("dictation");
+      renderCurrentView();
+      toast("Transcript updated");
+    })
+  );
+
+  $$(".act-raw").forEach((b) =>
+    b.addEventListener("click", () => {
+      const id = Number(b.dataset.id);
       if (state.expandedRawIds.has(id)) state.expandedRawIds.delete(id);
       else state.expandedRawIds.add(id);
-      renderCanvas();
+      renderCurrentView();
     })
   );
-  $$(".act-del").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await api(`/api/dictations/${btn.dataset.id}`, { method: "DELETE" });
+
+  $$(".act-export").forEach((b) =>
+    b.addEventListener("click", () => {
+      const it = state.dictations.find((x) => x.id === Number(b.dataset.id));
+      if (!it) return;
+      const stamp = new Date(it.created_at * 1000).toISOString().slice(0, 16).replace(/[:T]/g, "-");
+      downloadTextFile(`voxbox-transcript-${stamp}.txt`, it.cleaned_text + "\n");
+      toast("Exported transcript");
+    })
+  );
+
+  $$(".act-del").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api(`/api/dictations/${b.dataset.id}`, { method: "DELETE" });
       await loadTabData("dictation");
-      renderCanvas();
+      renderCurrentView();
+      toast("Deleted");
     })
   );
 }
 
-/* ==================== NOTETAKER (PHASE 2 NOTE) ==================== */
+/* ==================== 2. SCRATCHPAD (macOS NOTES SPLIT) ==================== */
 
-function renderNotetakerView() {
-  return `
-    <div class="page-container">
-      <div class="page-header">
-        <h1 class="page-title">Notetaker <span class="brand-badge" style="vertical-align:middle;margin-left:6px">Phase 2</span></h1>
-      </div>
-      <div class="hero-banner">
-        <h2>Local meeting notes, <em>coming next</em></h2>
-        <p>Planned for Phase 2: simultaneous dual-stream PipeWire recording that captures both your microphone and system speaker/call audio locally — zero meeting bots, 100% private.</p>
-      </div>
-      <div class="cards-grid">
-        <div class="card">
-          <h4 style="margin:0 0 6px">Dual Audio Capture</h4>
-          <p style="margin:0;color:var(--text-secondary);font-size:13px">Captures your mic + PipeWire output monitor sink so both sides of Zoom, Meet, or Discord calls are transcribed cleanly.</p>
-        </div>
-        <div class="card">
-          <h4 style="margin:0 0 6px">Live Transcript &amp; Speakers</h4>
-          <p style="margin:0;color:var(--text-secondary);font-size:13px">Real-time CUDA Whisper chunking separating "You" (mic) vs. "Other" (speaker) with timestamps.</p>
-        </div>
-        <div class="card">
-          <h4 style="margin:0 0 6px">Local Ollama Summaries</h4>
-          <p style="margin:0;color:var(--text-secondary);font-size:13px">Generates structured call overviews, key decisions, and action items with your local Ollama model.</p>
-        </div>
-      </div>
-    </div>`;
-}
-
-/* ==================== INSIGHTS ==================== */
-
-function renderInsightsView() {
-  const ins = state.insights || {
-    total_words: 0, wpm: 0, total_fixes: 0, words_corrected: 0, dict_fixes: 0,
-    total_dictations: 0, avg_stt_ms: 0, avg_llm_ms: 0, current_streak: 0, longest_streak: 0, heatmap: [],
-  };
-  const pct = Math.min(1, ins.wpm / 160);
-  const dashTotal = 188;
-  const dashOffset = dashTotal * (1 - pct);
-  const maxDay = Math.max(1, ...ins.heatmap.map((h) => h.words));
-
-  const cells = ins.heatmap.map((h) => {
-    let cls = "";
-    if (h.words > 0) {
-      const r = h.words / maxDay;
-      cls = r > 0.75 ? "l4" : r > 0.45 ? "l3" : r > 0.2 ? "l2" : "l1";
-    }
-    return `<div class="heat-cell ${cls}" title="${h.date}: ${h.words} words"></div>`;
-  }).join("");
-
-  const avgWords = ins.total_dictations ? Math.round(ins.total_words / ins.total_dictations) : 0;
-  const totalPipelineMs = ins.avg_stt_ms + ins.avg_llm_ms;
-  const maxBarMs = Math.max(totalPipelineMs, 600);
-  const sttPct = ins.avg_stt_ms ? Math.max(10, Math.round((ins.avg_stt_ms / maxBarMs) * 100)) : 0;
-  const llmPct = ins.avg_llm_ms ? Math.max(10, Math.round((ins.avg_llm_ms / maxBarMs) * 100)) : 0;
-  const totPct = totalPipelineMs ? Math.max(12, Math.round((totalPipelineMs / maxBarMs) * 100)) : 0;
-
-  return `
-    <div class="page-container">
-      <div class="page-header"><h1 class="page-title">Insights</h1></div>
-      <div class="insights-top">
-        <div class="card">
-          <div class="metric-big">${ins.wpm}</div>
-          <div class="metric-caption">Words per minute</div>
-          <div class="gauge-wrap">
-            <svg width="160" height="88" viewBox="0 0 160 88">
-              <path d="M20 78 A60 60 0 0 1 140 78" fill="none" stroke="var(--heat-0)" stroke-width="12" stroke-linecap="round"/>
-              <path d="M20 78 A60 60 0 0 1 140 78" fill="none" stroke="var(--accent)" stroke-width="12" stroke-linecap="round"
-                stroke-dasharray="${dashTotal}" stroke-dashoffset="${dashOffset.toFixed(1)}"/>
-              <text x="80" y="72" text-anchor="middle" fill="var(--text-secondary)" font-size="12" font-weight="600">
-                ${ins.wpm > 0 ? "CUDA Live" : "Start dictating"}
-              </text>
-            </svg>
-          </div>
-        </div>
-        <div class="card">
-          <div class="metric-big">${ins.total_fixes.toLocaleString()}</div>
-          <div class="metric-caption">Fixes made by VoxBox</div>
-          <div class="metric-list">
-            <div>${ins.words_corrected.toLocaleString()} AI cleanup ${ins.words_corrected === 1 ? "edit" : "edits"}</div>
-            <div>${ins.dict_fixes.toLocaleString()} dictionary &amp; snippet ${ins.dict_fixes === 1 ? "fix" : "fixes"}</div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="metric-big">${ins.total_words.toLocaleString()}</div>
-          <div class="metric-caption">Total words dictated</div>
-          <div class="metric-list">
-            <div>${ins.total_dictations.toLocaleString()} total ${ins.total_dictations === 1 ? "session" : "sessions"}</div>
-            <div>~${avgWords} words per dictation</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="insights-bottom">
-        <div class="card">
-          <div class="card-header-row">
-            <h3>Local Latency</h3>
-            <span class="card-header-sub">100% ON-DEVICE GPU</span>
-          </div>
-          <div class="bar-row">
-            <div class="bar-label">CUDA Whisper</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${sttPct}%"></div></div>
-            <div class="bar-value">${ins.avg_stt_ms} ms</div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-label">Ollama Cleanup</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${llmPct}%"></div></div>
-            <div class="bar-value">${ins.avg_llm_ms} ms</div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-label">Total Pipeline</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${totPct}%"></div></div>
-            <div class="bar-value">${totalPipelineMs} ms</div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header-row">
-            <h3>${ins.current_streak} ${ins.current_streak === 1 ? "day" : "days"} streak</h3>
-            <span class="card-header-sub">LONGEST · ${ins.longest_streak} ${ins.longest_streak === 1 ? "DAY" : "DAYS"}</span>
-          </div>
-          <div class="heatmap-grid">${cells}</div>
-        </div>
-      </div>
-    </div>`;
-}
-
-/* ==================== DICTIONARY ==================== */
-
-function renderDictionaryView() {
-  const q = state.searchDict.toLowerCase();
-  const filtered = state.dictionary.filter((d) =>
-    d.word.toLowerCase().includes(q) || (d.replacement || "").toLowerCase().includes(q)
+function renderScratchpadView(root) {
+  setToolbar(
+    "Scratchpad",
+    state.notes.length ? `${state.notes.length} ${state.notes.length === 1 ? "note" : "notes"}` : "",
+    `<button class="btn btn-secondary btn-sm" id="btn-new-note">New Note</button>`
   );
 
-  const rows = filtered.length
-    ? `<div class="list-card">${filtered
+  const activeNote = state.notes.find((n) => n.id === state.activeNoteId) || null;
+  const listHtml = state.notes.length
+    ? state.notes
+        .map((n) => {
+          const preview = (n.content || "").replace(/\s+/g, " ").trim() || "No additional text";
+          return `
+            <button class="note-list-item ${activeNote && n.id === activeNote.id ? "active" : ""}" data-nid="${n.id}">
+              <div class="note-list-title">${n.pinned ? "★ " : ""}${esc(n.title)}</div>
+              <div class="note-list-meta">
+                <span>${esc(formatTime(n.updated_at))}</span>
+                <span class="note-list-preview">${esc(preview)}</span>
+              </div>
+            </button>`;
+        })
+        .join("")
+    : `<div class="empty-state" style="padding:36px 16px"><p>No notes yet</p></div>`;
+
+  const wordCount = activeNote && activeNote.content.trim() ? activeNote.content.trim().split(/\s+/).length : 0;
+
+  const editorHtml = activeNote
+    ? `
+      <div class="notes-editor-bar">
+        <span class="notes-editor-status" id="note-save-status">${wordCount} ${wordCount === 1 ? "word" : "words"} · Saved locally</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn btn-ghost btn-sm" id="btn-note-pin">${activeNote.pinned ? "Unpin" : "Pin"}</button>
+          <button class="btn btn-ghost btn-sm" id="btn-note-export">Export</button>
+          <button class="btn btn-ghost btn-sm" id="btn-note-copy">Copy</button>
+          <button class="btn btn-ghost btn-sm" id="btn-note-del" style="color:var(--danger)">Delete</button>
+        </div>
+      </div>
+      <div class="notes-editor-body">
+        <input class="note-title-input" id="note-title" value="${esc(activeNote.title)}" placeholder="Title" />
+        <textarea class="note-content-input" id="note-content" placeholder="Type or hold ${esc(state.appState.hotkey_label)} to dictate directly into this note…">${esc(activeNote.content)}</textarea>
+      </div>`
+    : `
+      <div class="empty-state" style="margin:auto">
+        <h4>Scratchpad</h4>
+        <p>Keep quick voice notes, drafts, or prompts locally. Create a note to begin.</p>
+        <div style="margin-top:16px"><button class="btn btn-primary" id="btn-empty-new-note">Create Note</button></div>
+      </div>`;
+
+  root.innerHTML = `
+    <div class="notes-split">
+      <div class="notes-list-pane">
+        <div class="notes-list-header">
+          <div class="search-field" style="width:100%">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <input class="input" id="note-search" style="width:100%" placeholder="Search notes" value="${esc(state.searchNotes)}" />
+          </div>
+        </div>
+        <div class="notes-list-scroll">${listHtml}</div>
+      </div>
+      <div class="notes-editor-pane">${editorHtml}</div>
+    </div>`;
+
+  const createNote = async () => {
+    const res = await api("/api/scratchpad", { method: "POST", body: { title: "Untitled", content: "" } });
+    state.notes.unshift(res.item);
+    state.activeNoteId = res.item.id;
+    renderCurrentView();
+    $("#note-title")?.select();
+  };
+
+  $("#btn-new-note")?.addEventListener("click", createNote);
+  $("#btn-empty-new-note")?.addEventListener("click", createNote);
+
+  let stimer = null;
+  $("#note-search")?.addEventListener("input", (e) => {
+    state.searchNotes = e.target.value;
+    clearTimeout(stimer);
+    stimer = setTimeout(async () => {
+      await loadTabData("scratchpad");
+      renderCurrentView();
+      const inp = $("#note-search");
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }, 160);
+  });
+
+  $$(".note-list-item").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.activeNoteId = Number(el.dataset.nid);
+      renderCurrentView();
+    })
+  );
+
+  if (activeNote) {
+    const id = activeNote.id;
+    let saveTimer = null;
+    const scheduleSave = () => {
+      const text = $("#note-content").value;
+      const wc = text.trim() ? text.trim().split(/\s+/).length : 0;
+      const statusEl = $("#note-save-status");
+      if (statusEl) statusEl.textContent = `${wc} ${wc === 1 ? "word" : "words"} · Saving…`;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        const res = await api(`/api/scratchpad/${id}`, {
+          method: "PATCH",
+          body: { title: $("#note-title").value, content: text },
+        });
+        const idx = state.notes.findIndex((n) => n.id === id);
+        if (idx >= 0) state.notes[idx] = res.item;
+        const itemBtn = document.querySelector(`.note-list-item[data-nid="${id}"] .note-list-title`);
+        if (itemBtn) itemBtn.textContent = `${res.item.pinned ? "★ " : ""}${res.item.title}`;
+        if (statusEl) statusEl.textContent = `${wc} ${wc === 1 ? "word" : "words"} · Saved`;
+      }, 320);
+    };
+    $("#note-title")?.addEventListener("input", scheduleSave);
+    $("#note-content")?.addEventListener("input", scheduleSave);
+
+    $("#btn-note-pin")?.addEventListener("click", async () => {
+      const res = await api(`/api/scratchpad/${id}`, { method: "PATCH", body: { pinned: !activeNote.pinned } });
+      await loadTabData("scratchpad");
+      state.activeNoteId = res.item.id;
+      renderCurrentView();
+    });
+    $("#btn-note-copy")?.addEventListener("click", async () => {
+      await api("/api/copy", { method: "POST", body: { text: $("#note-content").value } });
+      toast("Note copied");
+    });
+    $("#btn-note-export")?.addEventListener("click", () => {
+      const title = ($("#note-title").value || "note").replace(/[^a-z0-9-_]+/gi, "-").toLowerCase();
+      downloadTextFile(`${title}.md`, `# ${$("#note-title").value}\n\n${$("#note-content").value}\n`);
+      toast("Exported Markdown");
+    });
+    $("#btn-note-del")?.addEventListener("click", async () => {
+      await api(`/api/scratchpad/${id}`, { method: "DELETE" });
+      state.activeNoteId = null;
+      await loadTabData("scratchpad");
+      renderCurrentView();
+      toast("Note deleted");
+    });
+  }
+}
+
+/* ==================== 3. NOTETAKER (PHASE 2) ==================== */
+
+function renderNotetakerView(root) {
+  setToolbar("Notetaker", "Phase 2 Roadmap");
+  root.innerHTML = `
+    <div class="notetaker-empty">
+      <div class="notetaker-icon">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
+      </div>
+      <h2>Meeting Notetaker</h2>
+      <p>Planned for Phase 2. Record and transcribe calls completely offline without joining meetings as a bot.</p>
+      <div class="inset-group notetaker-list">
+        <div class="pref-row">
+          <div>
+            <div class="pref-title">Dual-Stream PipeWire Audio</div>
+            <div class="pref-desc">Captures both your microphone and system speaker monitor simultaneously for Zoom, Meet, and Discord calls.</div>
+          </div>
+        </div>
+        <div class="pref-row">
+          <div>
+            <div class="pref-title">Speaker-Labeled Local Transcript</div>
+            <div class="pref-desc">Separates "You" (mic) from "Other" (call audio) in real time on your GPU.</div>
+          </div>
+        </div>
+        <div class="pref-row">
+          <div>
+            <div class="pref-title">Private AI Summaries</div>
+            <div class="pref-desc">Generates structured meeting overviews, decisions, and action items using your configured LLM.</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ==================== 4. DICTIONARY ==================== */
+
+function renderDictionaryView(root) {
+  const q = state.searchDict.toLowerCase();
+  const filtered = state.dictionary.filter(
+    (d) => d.word.toLowerCase().includes(q) || (d.replacement || "").toLowerCase().includes(q)
+  );
+
+  setToolbar(
+    "Dictionary",
+    `${filtered.length} ${filtered.length === 1 ? "term" : "terms"}`,
+    `<div class="search-field">
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+       <input class="input" id="dict-search" placeholder="Filter terms" value="${esc(state.searchDict)}" />
+     </div>
+     <button class="btn btn-secondary btn-sm" id="btn-import-dict">Import</button>`
+  );
+
+  const listHtml = filtered.length
+    ? `<div class="inset-group">${filtered
         .map(
           (d) => `
-        <div class="list-row">
-          <div>
-            <strong>${esc(d.word)}</strong>
-            ${d.replacement ? `<span class="snippet-arrow">→</span><span>${esc(d.replacement)}</span>` : ""}
-          </div>
-          <button class="btn btn-secondary btn-sm del-dict" data-id="${d.id}">Delete</button>
-        </div>`
+          <div class="inset-row">
+            <div>
+              <strong>${esc(d.word)}</strong>
+              ${d.replacement ? `<span class="row-arrow">→</span><span>${esc(d.replacement)}</span>` : ""}
+            </div>
+            <button class="action-chip danger del-dict" data-id="${d.id}">Remove</button>
+          </div>`
         )
         .join("")}</div>`
-    : `<div class="list-card"><div class="empty-state"><h4>Your dictionary is empty</h4><p>Add custom names, jargon, or spelling corrections — VoxBox passes them to both Whisper and Ollama.</p></div></div>`;
+    : `<div class="inset-group"><div class="empty-state"><h4>No custom terms yet</h4><p>Add names, acronyms, or domain terms above. VoxBox feeds them to both Whisper and AI Cleanup for exact spelling.</p></div></div>`;
 
-  return `
-    <div class="page-container">
-      <div class="page-header">
-        <h1 class="page-title">Dictionary</h1>
-        <div class="page-actions">
-          <button class="btn btn-secondary" id="btn-import-dict">Import</button>
-          <button class="btn btn-primary" id="btn-add-dict">Add new</button>
-        </div>
+  root.innerHTML = `
+    <div class="page">
+      <div class="quick-add-bar">
+        <input class="input" id="qa-dict-word" placeholder="Term or heard phrase (e.g. Arbitrum)" />
+        <input class="input" id="qa-dict-repl" placeholder="Optional replacement (leave blank to preserve)" />
+        <button class="btn btn-primary" id="qa-dict-add">Add</button>
       </div>
-      <div class="hero-banner">
-        <h2>VoxBox spells the way <em>you</em> do.</h2>
-        <p>Add personal terms, product names, or jargon so they are spelled accurately in every dictation.</p>
-        <button class="btn hero-cta" id="btn-hero-dict">Add new word</button>
-      </div>
-      <div class="search-row">
-        <span style="font-size:13px;color:var(--text-secondary)">${filtered.length} term${filtered.length === 1 ? "" : "s"}</span>
-        <input class="input search-input" id="dict-search" placeholder="Search dictionary…" value="${esc(state.searchDict)}" />
-      </div>
-      ${rows}
+      ${listHtml}
     </div>`;
-}
 
-function bindDictionaryEvents() {
-  const openAdd = () =>
-    openFormModal(
-      "Add dictionary word",
-      `
-      <div class="field"><label>Word / Preferred Spelling</label><input class="input" id="f-word" placeholder="e.g. Wispr Flow, Arbitrum, onchain" autofocus /></div>
-      <div class="field"><label>Optional forced replacement (leave blank to preserve exact spelling)</label><input class="input" id="f-repl" placeholder="e.g. if Whisper hears 'Vis4Flow', put 'Wispr Flow' here" /></div>
-      <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn btn-secondary" id="f-cancel">Cancel</button><button class="btn btn-primary" id="f-save">Save</button></div>`,
-      async () => {
-        const word = $("#f-word").value.trim();
-        const replacement = $("#f-repl").value.trim();
-        if (!word) return;
-        await api("/api/dictionary", { method: "POST", body: { word, replacement } });
-        closeFormModal();
-        await loadTabData("dictionary");
-        renderCanvas();
-        toast("Word added");
-      }
-    );
+  const submitAdd = async () => {
+    const word = $("#qa-dict-word").value.trim();
+    const replacement = $("#qa-dict-repl").value.trim();
+    if (!word) return;
+    await api("/api/dictionary", { method: "POST", body: { word, replacement } });
+    await loadTabData("dictionary");
+    renderCurrentView();
+    toast("Added to dictionary");
+  };
 
-  $("#btn-add-dict")?.addEventListener("click", openAdd);
-  $("#btn-hero-dict")?.addEventListener("click", openAdd);
+  $("#qa-dict-add")?.addEventListener("click", submitAdd);
+  $("#qa-dict-word")?.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAdd(); });
+  $("#qa-dict-repl")?.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAdd(); });
+
+  $("#dict-search")?.addEventListener("input", (e) => {
+    state.searchDict = e.target.value;
+    renderCurrentView();
+    const inp = $("#dict-search");
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  });
+
   $("#btn-import-dict")?.addEventListener("click", () =>
     openFormModal(
-      "Import dictionary words",
-      `
-      <div class="field"><label>One word per line (or <code>heard -> spelling</code>)</label><textarea class="textarea" id="f-bulk" placeholder="Wispr Flow\nArbitrum\nVis4Flow -> Wispr Flow"></textarea></div>
-      <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn btn-secondary" id="f-cancel">Cancel</button><button class="btn btn-primary" id="f-save">Import</button></div>`,
+      "Import Dictionary",
+      `<div class="field"><label>One entry per line (optional <code>heard -> spelling</code>)</label>
+       <textarea class="textarea" id="f-bulk" placeholder="VoxBox\nArbitrum\nVis4Flow -> Wispr Flow"></textarea></div>
+       <div class="dialog-actions"><button class="btn btn-secondary" id="f-cancel">Cancel</button><button class="btn btn-primary" id="f-save">Import</button></div>`,
       async () => {
         const res = await api("/api/dictionary/import", { method: "POST", body: { text: $("#f-bulk").value } });
         closeFormModal();
         await loadTabData("dictionary");
-        renderCanvas();
-        toast(`Imported ${res.count} words`);
+        renderCurrentView();
+        toast(`Imported ${res.count} ${res.count === 1 ? "term" : "terms"}`);
       }
     )
   );
-  $("#dict-search")?.addEventListener("input", (e) => {
-    state.searchDict = e.target.value;
-    renderCanvas();
-    const inp = $("#dict-search");
-    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
-  });
+
   $$(".del-dict").forEach((b) =>
     b.addEventListener("click", async () => {
       await api(`/api/dictionary/${b.dataset.id}`, { method: "DELETE" });
       await loadTabData("dictionary");
-      renderCanvas();
+      renderCurrentView();
     })
   );
 }
 
-/* ==================== SNIPPETS ==================== */
+/* ==================== 5. SNIPPETS ==================== */
 
-function renderSnippetsView() {
+function renderSnippetsView(root) {
   const q = state.searchSnippets.toLowerCase();
-  const filtered = state.snippets.filter((s) =>
-    s.trigger.toLowerCase().includes(q) || s.expansion.toLowerCase().includes(q)
+  const filtered = state.snippets.filter(
+    (s) => s.trigger.toLowerCase().includes(q) || s.expansion.toLowerCase().includes(q)
   );
 
-  const rows = filtered.length
-    ? `<div class="list-card">${filtered
+  setToolbar(
+    "Snippets",
+    `${filtered.length} ${filtered.length === 1 ? "snippet" : "snippets"}`,
+    `<div class="search-field">
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+       <input class="input" id="snip-search" placeholder="Filter snippets" value="${esc(state.searchSnippets)}" />
+     </div>
+     <button class="btn btn-secondary btn-sm" id="btn-import-snip">Import</button>`
+  );
+
+  const listHtml = filtered.length
+    ? `<div class="inset-group">${filtered
         .map(
           (s) => `
-        <div class="list-row">
-          <div style="min-width:0">
-            <strong>${esc(s.trigger)}</strong>
-            <span class="snippet-arrow">→</span>
-            <span style="color:var(--text-secondary)">${esc(s.expansion)}</span>
-          </div>
-          <button class="btn btn-secondary btn-sm del-snip" data-id="${s.id}">Delete</button>
-        </div>`
+          <div class="inset-row">
+            <div style="min-width:0">
+              <strong>${esc(s.trigger)}</strong>
+              <span class="row-arrow">→</span>
+              <span style="color:var(--text-secondary)">${esc(s.expansion)}</span>
+            </div>
+            <button class="action-chip danger del-snip" data-id="${s.id}">Remove</button>
+          </div>`
         )
         .join("")}</div>`
-    : `<div class="list-card"><div class="empty-state"><h4>No snippets yet</h4><p>Save emails, links, or reusable prompts — say the trigger phrase to insert the full expansion instantly.</p></div></div>`;
+    : `<div class="inset-group"><div class="empty-state"><h4>No voice snippets yet</h4><p>Map a short spoken trigger to an email address, link, or reusable prompt to insert it instantly.</p></div></div>`;
 
-  return `
-    <div class="page-container">
-      <div class="page-header">
-        <h1 class="page-title">Snippets</h1>
-        <div class="page-actions">
-          <button class="btn btn-secondary" id="btn-import-snip">Import</button>
-          <button class="btn btn-primary" id="btn-add-snip">Add new</button>
-        </div>
+  root.innerHTML = `
+    <div class="page">
+      <div class="quick-add-bar">
+        <input class="input" id="qa-snip-trig" placeholder="Spoken trigger (e.g. my email)" />
+        <input class="input" id="qa-snip-exp" placeholder="Expanded text (e.g. name@domain.com)" />
+        <button class="btn btn-primary" id="qa-snip-add">Add</button>
       </div>
-      <div class="hero-banner">
-        <h2>The stuff <em>you</em> shouldn't have to re-type.</h2>
-        <p>Save text you type often — an email, calendar link, or prompt — then speak the trigger phrase to drop it in instantly.</p>
-        <button class="btn hero-cta" id="btn-hero-snip">Add new snippet</button>
-      </div>
-      <div class="search-row">
-        <span style="font-size:13px;color:var(--text-secondary)">${filtered.length} snippet${filtered.length === 1 ? "" : "s"}</span>
-        <input class="input search-input" id="snip-search" placeholder="Search snippets…" value="${esc(state.searchSnippets)}" />
-      </div>
-      ${rows}
+      ${listHtml}
     </div>`;
-}
 
-function bindSnippetsEvents() {
-  const openAdd = () =>
-    openFormModal(
-      "Add snippet",
-      `
-      <div class="field"><label>Spoken trigger phrase</label><input class="input" id="f-trig" placeholder="e.g. work email" autofocus /></div>
-      <div class="field"><label>Expanded text</label><textarea class="textarea" id="f-exp" placeholder="e.g. name@company.com"></textarea></div>
-      <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn btn-secondary" id="f-cancel">Cancel</button><button class="btn btn-primary" id="f-save">Save</button></div>`,
-      async () => {
-        const trigger = $("#f-trig").value.trim();
-        const expansion = $("#f-exp").value.trim();
-        if (!trigger || !expansion) return;
-        await api("/api/snippets", { method: "POST", body: { trigger, expansion } });
-        closeFormModal();
-        await loadTabData("snippets");
-        renderCanvas();
-        toast("Snippet saved");
-      }
-    );
+  const submitAdd = async () => {
+    const trigger = $("#qa-snip-trig").value.trim();
+    const expansion = $("#qa-snip-exp").value.trim();
+    if (!trigger || !expansion) return;
+    await api("/api/snippets", { method: "POST", body: { trigger, expansion } });
+    await loadTabData("snippets");
+    renderCurrentView();
+    toast("Snippet saved");
+  };
 
-  $("#btn-add-snip")?.addEventListener("click", openAdd);
-  $("#btn-hero-snip")?.addEventListener("click", openAdd);
+  $("#qa-snip-add")?.addEventListener("click", submitAdd);
+  $("#qa-snip-exp")?.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAdd(); });
+
+  $("#snip-search")?.addEventListener("input", (e) => {
+    state.searchSnippets = e.target.value;
+    renderCurrentView();
+    const inp = $("#snip-search");
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  });
+
   $("#btn-import-snip")?.addEventListener("click", () =>
     openFormModal(
-      "Import snippets",
-      `
-      <div class="field"><label>One per line as <code>trigger -> expansion</code></label><textarea class="textarea" id="f-bulk" placeholder="my cal link -> https://cal.com/you"></textarea></div>
-      <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn btn-secondary" id="f-cancel">Cancel</button><button class="btn btn-primary" id="f-save">Import</button></div>`,
+      "Import Snippets",
+      `<div class="field"><label>One per line as <code>trigger -> expansion</code></label>
+       <textarea class="textarea" id="f-bulk" placeholder="my cal link -> https://cal.com/you"></textarea></div>
+       <div class="dialog-actions"><button class="btn btn-secondary" id="f-cancel">Cancel</button><button class="btn btn-primary" id="f-save">Import</button></div>`,
       async () => {
         const res = await api("/api/snippets/import", { method: "POST", body: { text: $("#f-bulk").value } });
         closeFormModal();
         await loadTabData("snippets");
-        renderCanvas();
-        toast(`Imported ${res.count} snippets`);
+        renderCurrentView();
+        toast(`Imported ${res.count} ${res.count === 1 ? "snippet" : "snippets"}`);
       }
     )
   );
-  $("#snip-search")?.addEventListener("input", (e) => {
-    state.searchSnippets = e.target.value;
-    renderCanvas();
-    const inp = $("#snip-search");
-    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
-  });
+
   $$(".del-snip").forEach((b) =>
     b.addEventListener("click", async () => {
       await api(`/api/snippets/${b.dataset.id}`, { method: "DELETE" });
       await loadTabData("snippets");
-      renderCanvas();
+      renderCurrentView();
     })
   );
 }
 
-/* ==================== STYLE ==================== */
+/* ==================== 6. STYLE ==================== */
 
-function renderStyleView() {
+function renderStyleView(root) {
   const cfg = state.appState.config;
   const styles = state.appState.styles || {};
   const labels = {
     default: "Default",
-    casual: "Personal messages",
-    work: "Work messages",
+    casual: "Personal",
+    work: "Work",
     email: "Email",
     code: "Code & Prompts",
   };
   const active = cfg.llm.active_style || "default";
 
-  return `
-    <div class="page-container">
-      <div class="page-header"><h1 class="page-title">Style</h1></div>
-      <div class="tab-bar">
-        ${Object.entries(labels)
-          .map(([k, lbl]) => `<button class="tab-btn style-tab ${k === active ? "active" : ""}" data-style="${k}">${esc(lbl)}</button>`)
-          .join("")}
+  setToolbar("Style", "Tone and formatting guidance");
+
+  root.innerHTML = `
+    <div class="page">
+      <div class="pref-section-label">Writing Preset</div>
+      <div style="margin-bottom:16px">
+        <div class="segmented" role="tablist">
+          ${Object.entries(labels)
+            .map(([k, lbl]) => `<button class="seg-btn style-seg ${k === active ? "active" : ""}" data-style="${k}" role="tab">${esc(lbl)}</button>`)
+            .join("")}
+        </div>
       </div>
-      <div class="card" style="margin-bottom:16px">
-        <div style="font-size:12px;font-weight:700;letter-spacing:0.06em;color:var(--accent);text-transform:uppercase;margin-bottom:6px">Active Writing Style</div>
-        <h3 class="serif-title" style="margin:0 0 8px;font-size:22px">${esc(labels[active] || active)}</h3>
-        <p style="margin:0;color:var(--text-secondary)">${esc(styles[active] || "")}</p>
+
+      <div class="inset-group" style="margin-bottom:24px">
+        <div class="pref-row">
+          <div>
+            <div class="pref-title">${esc(labels[active] || active)}</div>
+            <div class="pref-desc">${esc(styles[active] || "")}</div>
+          </div>
+          <span class="pill-tag accent">Active</span>
+        </div>
       </div>
-      <div class="card">
-        <div class="field">
-          <label>Custom cleanup instructions (always appended to Ollama's prompt)</label>
-          <textarea class="textarea" id="style-custom" placeholder="e.g. Prefer concise sentences, never use em-dashes, format numbered steps cleanly…">${esc(cfg.llm.custom_instructions || "")}</textarea>
+
+      <div class="pref-section-label">Custom Instructions</div>
+      <div class="surface-card">
+        <div class="field" style="margin-bottom:12px">
+          <label for="style-custom">Additional guidance appended to your AI cleanup prompt</label>
+          <textarea class="textarea" id="style-custom" style="min-height:120px" placeholder="e.g. Keep sentences concise, avoid em-dashes, preserve technical identifiers verbatim…">${esc(cfg.llm.custom_instructions || "")}</textarea>
         </div>
         <div style="display:flex;justify-content:flex-end">
-          <button class="btn btn-primary" id="btn-save-style">Save instructions</button>
+          <button class="btn btn-primary" id="btn-save-style">Save Instructions</button>
         </div>
       </div>
     </div>`;
-}
 
-function bindStyleEvents() {
-  $$(".style-tab").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await api("/api/settings", { method: "POST", body: { llm: { active_style: btn.dataset.style } } });
+  $$(".style-seg").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api("/api/settings", { method: "POST", body: { llm: { active_style: b.dataset.style } } });
       await refreshState();
-      renderCanvas();
-      toast(`Style set to ${btn.textContent}`);
+      renderCurrentView();
+      toast(`Style set to ${b.textContent}`);
     })
   );
+
   $("#btn-save-style")?.addEventListener("click", async () => {
     await api("/api/settings", { method: "POST", body: { llm: { custom_instructions: $("#style-custom").value } } });
     await refreshState();
-    toast("Custom style instructions saved");
+    toast("Style instructions saved");
   });
 }
 
-/* ==================== TRANSFORMS ==================== */
+/* ==================== 7. TRANSFORMS ==================== */
 
-function renderTransformsView() {
+function renderTransformsView(root) {
   const cfg = state.appState.config;
   const autoId = cfg.llm.auto_transform_id;
+
+  setToolbar(
+    "Transforms",
+    `${state.transforms.length} presets`,
+    `<button class="btn btn-ghost btn-sm" id="btn-reset-tr">Reset Defaults</button>
+     <button class="btn btn-primary btn-sm" id="btn-new-tr">New Transform</button>`
+  );
+
   const opts = state.transforms
     .map((t) => `<option value="${t.id}" ${autoId === t.id ? "selected" : ""}>${esc(t.name)}</option>`)
     .join("");
@@ -672,69 +885,56 @@ function renderTransformsView() {
   const cards = state.transforms
     .map(
       (t) => `
-    <div class="transform-card" data-tid="${t.id}">
-      <div>
-        <h4>${esc(t.name)}</h4>
-        <p>${esc(t.description || "Custom local Ollama transform")}</p>
-      </div>
-      <div style="display:flex;gap:6px;justify-content:space-between;align-items:center">
-        <button class="btn btn-secondary btn-sm tr-try" data-id="${t.id}">Try it</button>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-secondary btn-sm tr-edit" data-id="${t.id}">Edit</button>
-          ${t.is_default ? "" : `<button class="btn btn-secondary btn-sm tr-del" data-id="${t.id}">✕</button>`}
+      <div class="tile-card">
+        <div>
+          <h4>${esc(t.name)}</h4>
+          <p>${esc(t.description || "Custom rewrite prompt")}</p>
         </div>
-      </div>
-    </div>`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+          <button class="btn btn-secondary btn-sm tr-try" data-id="${t.id}">Test</button>
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-ghost btn-sm tr-edit" data-id="${t.id}">Edit</button>
+            ${t.is_default ? "" : `<button class="action-chip danger tr-del" data-id="${t.id}">Delete</button>`}
+          </div>
+        </div>
+      </div>`
     )
     .join("");
 
-  return `
-    <div class="page-container">
-      <div class="page-header">
-        <h1 class="page-title">Transforms</h1>
-        <div class="page-actions">
-          <button class="btn btn-secondary" id="btn-reset-tr">Reset defaults</button>
-          <button class="btn btn-primary" id="btn-new-tr">Create New</button>
-        </div>
-      </div>
-      <div class="hero-banner">
-        <h2>Transform works anywhere you write</h2>
-        <p>Automatically apply a local Ollama rewrite preset after dictation, or test any transform on text below.</p>
-      </div>
-      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px">
-        <div>
-          <div style="font-weight:600">Auto Apply After Dictation</div>
-          <div style="font-size:12.5px;color:var(--text-secondary)">Run the selected transform automatically on every dictation.</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px">
-          <select class="select" id="tr-auto-select" style="width:180px" ${autoId ? "" : "disabled"}>${opts}</select>
-          <label class="switch">
-            <input type="checkbox" id="tr-auto-toggle" ${autoId ? "checked" : ""} />
-            <span class="slider"></span>
-          </label>
-        </div>
-      </div>
-      <h3 class="serif-title" style="font-size:21px;margin:0 0 8px">My Transforms</h3>
-      <div class="cards-grid">
-        ${cards}
-        <div class="transform-card" id="card-create-tr" style="border-style:dashed;align-items:center;justify-content:center;text-align:center">
-          <div style="font-size:22px;color:var(--text-muted)">+</div>
+  root.innerHTML = `
+    <div class="page">
+      <div class="inset-group" style="margin-bottom:24px">
+        <div class="pref-row">
           <div>
-            <h4>Create your own</h4>
-            <p>Write a custom Ollama prompt</p>
+            <div class="pref-title">Auto-Apply After Dictation</div>
+            <div class="pref-desc">Automatically run the selected transform on every dictated transcript.</div>
+          </div>
+          <div class="pref-control">
+            <select class="select" id="tr-auto-select" style="width:180px" ${autoId ? "" : "disabled"}>${opts}</select>
+            <label class="switch"><input type="checkbox" id="tr-auto-toggle" ${autoId ? "checked" : ""}/><span class="slider"></span></label>
           </div>
         </div>
       </div>
-    </div>`;
-}
 
-function bindTransformsEvents() {
+      <div class="pref-section-label">Presets</div>
+      <div class="tiles-grid">
+        ${cards}
+        <button class="tile-card dashed" id="card-create-tr">
+          <div style="font-size:20px;color:var(--text-tertiary)">+</div>
+          <div>
+            <h4>New Transform</h4>
+            <p>Create a reusable rewrite prompt</p>
+          </div>
+        </button>
+      </div>
+    </div>`;
+
   const saveAuto = async (enabled) => {
     const sel = $("#tr-auto-select");
     const chosen = enabled && sel?.value ? Number(sel.value) : null;
     await api("/api/settings", { method: "POST", body: { llm: { auto_transform_id: chosen } } });
     await refreshState();
-    renderCanvas();
+    renderCurrentView();
   };
 
   $("#tr-auto-toggle")?.addEventListener("change", (e) => saveAuto(e.target.checked));
@@ -742,12 +942,11 @@ function bindTransformsEvents() {
 
   const openEditor = (existing = null) =>
     openFormModal(
-      existing ? `Edit ${existing.name}` : "Create Transform",
-      `
-      <div class="field"><label>Name</label><input class="input" id="f-tname" value="${esc(existing?.name || "")}" placeholder="e.g. Executive Summary" /></div>
-      <div class="field"><label>Short description</label><input class="input" id="f-tdesc" value="${esc(existing?.description || "")}" placeholder="What does this transform do?" /></div>
-      <div class="field"><label>System prompt</label><textarea class="textarea" id="f-tprompt" style="min-height:130px">${esc(existing?.prompt || "")}</textarea></div>
-      <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn btn-secondary" id="f-cancel">Cancel</button><button class="btn btn-primary" id="f-save">Save</button></div>`,
+      existing ? `Edit ${existing.name}` : "New Transform",
+      `<div class="field"><label>Name</label><input class="input" id="f-tname" value="${esc(existing?.name || "")}" placeholder="e.g. Executive Summary" /></div>
+       <div class="field"><label>Description</label><input class="input" id="f-tdesc" value="${esc(existing?.description || "")}" placeholder="Short summary of what this transform does" /></div>
+       <div class="field"><label>Prompt</label><textarea class="textarea" id="f-tprompt" style="min-height:130px">${esc(existing?.prompt || "")}</textarea></div>
+       <div class="dialog-actions"><button class="btn btn-secondary" id="f-cancel">Cancel</button><button class="btn btn-primary" id="f-save">Save</button></div>`,
       async () => {
         await api("/api/transforms", {
           method: "POST",
@@ -755,7 +954,7 @@ function bindTransformsEvents() {
         });
         closeFormModal();
         await loadTabData("transforms");
-        renderCanvas();
+        renderCurrentView();
         toast("Transform saved");
       }
     );
@@ -765,35 +964,31 @@ function bindTransformsEvents() {
   $("#btn-reset-tr")?.addEventListener("click", async () => {
     await api("/api/transforms/reset", { method: "POST" });
     await loadTabData("transforms");
-    renderCanvas();
+    renderCurrentView();
     toast("Default transforms restored");
   });
   $$(".tr-edit").forEach((b) =>
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
+    b.addEventListener("click", () => {
       const t = state.transforms.find((x) => x.id === Number(b.dataset.id));
       if (t) openEditor(t);
     })
   );
   $$(".tr-del").forEach((b) =>
-    b.addEventListener("click", async (e) => {
-      e.stopPropagation();
+    b.addEventListener("click", async () => {
       await api(`/api/transforms/${b.dataset.id}`, { method: "DELETE" });
       await loadTabData("transforms");
-      renderCanvas();
+      renderCurrentView();
     })
   );
   $$(".tr-try").forEach((b) =>
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
+    b.addEventListener("click", () => {
       const t = state.transforms.find((x) => x.id === Number(b.dataset.id));
       if (!t) return;
       openFormModal(
-        `Try "${t.name}"`,
-        `
-        <div class="field"><label>Input text (dictate or paste here)</label><textarea class="textarea" id="f-in" placeholder="Hold ${esc(state.appState.hotkey_label)} to dictate directly here…"></textarea></div>
-        <div class="field"><label>Result</label><textarea class="textarea" id="f-out" readonly placeholder="Transformed output will appear here…"></textarea></div>
-        <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn btn-secondary" id="f-cancel">Close</button><button class="btn btn-primary" id="f-save">Run Transform</button></div>`,
+        `Test "${t.name}"`,
+        `<div class="field"><label>Input (dictate with ${esc(state.appState.hotkey_label)} or paste text)</label><textarea class="textarea" id="f-in" placeholder="Enter text to transform…"></textarea></div>
+         <div class="field"><label>Output</label><textarea class="textarea" id="f-out" readonly placeholder="Transformed result will appear here…"></textarea></div>
+         <div class="dialog-actions"><button class="btn btn-secondary" id="f-cancel">Close</button><button class="btn btn-primary" id="f-save">Run Transform</button></div>`,
         async () => {
           const btn = $("#f-save");
           btn.disabled = true;
@@ -801,7 +996,7 @@ function bindTransformsEvents() {
           try {
             const res = await api("/api/transforms/run", { method: "POST", body: { transform_id: t.id, text: $("#f-in").value } });
             $("#f-out").value = res.result;
-            toast(`Done in ${res.latency_ms}ms`);
+            toast(`Completed in ${res.latency_ms} ms`);
           } finally {
             btn.disabled = false;
             btn.textContent = "Run Transform";
@@ -812,142 +1007,120 @@ function bindTransformsEvents() {
   );
 }
 
-/* ==================== SCRATCHPAD ==================== */
+/* ==================== 8. INSIGHTS ==================== */
 
-function renderScratchpadView() {
-  if (state.activeNoteId !== null) {
-    const note = state.notes.find((n) => n.id === state.activeNoteId);
-    if (note) {
-      return `
-        <div class="page-container">
-          <div class="page-header">
-            <button class="btn btn-secondary" id="btn-note-back">← All notes</button>
-            <div class="page-actions">
-              <button class="btn btn-secondary" id="btn-note-pin">${note.pinned ? "Unpin" : "Pin"}</button>
-              <button class="btn btn-danger" id="btn-note-del">Delete</button>
-              <button class="btn btn-primary" id="btn-note-copy">Copy</button>
-            </div>
-          </div>
-          <div class="note-editor">
-            <input class="note-title-input" id="note-title" value="${esc(note.title)}" placeholder="Note title" />
-            <textarea class="note-content-input" id="note-content" placeholder="Start typing or hold ${esc(state.appState.hotkey_label)} to dictate directly into this note…">${esc(note.content)}</textarea>
-          </div>
-        </div>`;
-    }
-    state.activeNoteId = null;
-  }
+function renderInsightsView(root) {
+  const ins = state.insights || {
+    total_words: 0, wpm: 0, total_fixes: 0, words_corrected: 0, dict_fixes: 0,
+    total_dictations: 0, avg_stt_ms: 0, avg_llm_ms: 0, current_streak: 0, longest_streak: 0, heatmap: [],
+  };
+  setToolbar("Insights", "Local usage & performance");
 
-  const listHtml = state.notes.length
-    ? state.notes
-        .map(
-          (n) => `
-      <div class="note-card" data-nid="${n.id}">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <strong>${n.pinned ? "📌 " : ""}${esc(n.title)}</strong>
-          <span style="font-size:12px;color:var(--text-muted)">${esc(formatDayGroup(n.updated_at))} · ${esc(formatTime(n.updated_at))}</span>
+  const pct = Math.min(1, ins.wpm / 160);
+  const dashTotal = 188;
+  const dashOffset = dashTotal * (1 - pct);
+  const maxDay = Math.max(1, ...ins.heatmap.map((h) => h.words));
+  const cells = ins.heatmap
+    .map((h) => {
+      let cls = "";
+      if (h.words > 0) {
+        const r = h.words / maxDay;
+        cls = r > 0.75 ? "l4" : r > 0.45 ? "l3" : r > 0.2 ? "l2" : "l1";
+      }
+      return `<div class="heat-cell ${cls}" title="${h.date}: ${h.words} words"></div>`;
+    })
+    .join("");
+
+  const avgWords = ins.total_dictations ? Math.round(ins.total_words / ins.total_dictations) : 0;
+  const totalMs = ins.avg_stt_ms + ins.avg_llm_ms;
+  const maxBar = Math.max(totalMs, 600);
+  const sttPct = ins.avg_stt_ms ? Math.max(8, Math.round((ins.avg_stt_ms / maxBar) * 100)) : 0;
+  const llmPct = ins.avg_llm_ms ? Math.max(8, Math.round((ins.avg_llm_ms / maxBar) * 100)) : 0;
+  const totPct = totalMs ? Math.max(10, Math.round((totalMs / maxBar) * 100)) : 0;
+
+  root.innerHTML = `
+    <div class="page">
+      <div class="kpi-grid">
+        <div class="surface-card">
+          <div class="kpi-label">Speaking Pace</div>
+          <div class="kpi-value">${ins.wpm} <span style="font-size:14px;font-weight:500;color:var(--text-tertiary)">wpm</span></div>
+          <div class="gauge-wrap">
+            <svg width="152" height="84" viewBox="0 0 160 88">
+              <path d="M20 78 A60 60 0 0 1 140 78" fill="none" stroke="var(--heat-0)" stroke-width="10" stroke-linecap="round"/>
+              <path d="M20 78 A60 60 0 0 1 140 78" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round"
+                stroke-dasharray="${dashTotal}" stroke-dashoffset="${dashOffset.toFixed(1)}"/>
+              <text x="80" y="72" text-anchor="middle" fill="var(--text-tertiary)" font-size="11.5" font-weight="500">
+                ${ins.wpm > 0 ? "Active" : "No sessions"}
+              </text>
+            </svg>
+          </div>
         </div>
-        <div style="font-size:13.2px;color:var(--text-secondary);white-space:pre-line;max-height:72px;overflow:hidden">${esc(n.content || "Empty note")}</div>
-      </div>`
-        )
-        .join("")
-    : `<div class="list-card"><div class="empty-state"><h4>No scratchpad notes yet</h4><p>Drop a to-do list, polish a message before sending, or brain-dump an idea using voice.</p></div></div>`;
 
-  return `
-    <div class="page-container">
-      <div class="page-header">
-        <h1 class="page-title">Scratchpad</h1>
-        <button class="btn btn-primary" id="btn-new-note">Start new note</button>
+        <div class="surface-card">
+          <div class="kpi-label">Refinements</div>
+          <div class="kpi-value">${ins.total_fixes.toLocaleString()}</div>
+          <div class="kpi-sub">
+            <div>${ins.words_corrected.toLocaleString()} AI cleanup ${ins.words_corrected === 1 ? "edit" : "edits"}</div>
+            <div>${ins.dict_fixes.toLocaleString()} dictionary &amp; snippet ${ins.dict_fixes === 1 ? "fix" : "fixes"}</div>
+          </div>
+        </div>
+
+        <div class="surface-card">
+          <div class="kpi-label">Words Dictated</div>
+          <div class="kpi-value">${ins.total_words.toLocaleString()}</div>
+          <div class="kpi-sub">
+            <div>${ins.total_dictations.toLocaleString()} ${ins.total_dictations === 1 ? "session" : "sessions"}</div>
+            <div>~${avgWords} words per dictation</div>
+          </div>
+        </div>
       </div>
-      <div class="hero-banner">
-        <h2>For quick thoughts you want to come back to</h2>
-        <p>Brain-dump an idea, polish a message before sending, or keep a running voice to-do list — stored 100% locally.</p>
-        <button class="btn hero-cta" id="btn-hero-note">Start new note</button>
+
+      <div class="insights-lower">
+        <div class="surface-card">
+          <div class="card-head">
+            <h3>Pipeline Speed</h3>
+            <span class="card-head-meta">${esc(state.appState.llm_provider_label)}</span>
+          </div>
+          <div class="latency-row">
+            <div class="latency-label">CUDA Whisper</div>
+            <div class="latency-track"><div class="latency-fill" style="width:${sttPct}%"></div></div>
+            <div class="latency-val">${ins.avg_stt_ms} ms</div>
+          </div>
+          <div class="latency-row">
+            <div class="latency-label">AI Cleanup</div>
+            <div class="latency-track"><div class="latency-fill" style="width:${llmPct}%"></div></div>
+            <div class="latency-val">${ins.avg_llm_ms} ms</div>
+          </div>
+          <div class="latency-row">
+            <div class="latency-label">Total</div>
+            <div class="latency-track"><div class="latency-fill" style="width:${totPct}%"></div></div>
+            <div class="latency-val">${totalMs} ms</div>
+          </div>
+        </div>
+
+        <div class="surface-card">
+          <div class="card-head">
+            <h3>${ins.current_streak} ${ins.current_streak === 1 ? "day" : "days"} streak</h3>
+            <span class="card-head-meta">Longest · ${ins.longest_streak} ${ins.longest_streak === 1 ? "day" : "days"}</span>
+          </div>
+          <div class="heatmap-grid">${cells}</div>
+          <div class="heatmap-legend">
+            <span>Less</span>
+            <span class="legend-swatch" style="background:var(--heat-0)"></span>
+            <span class="legend-swatch" style="background:var(--heat-1)"></span>
+            <span class="legend-swatch" style="background:var(--heat-2)"></span>
+            <span class="legend-swatch" style="background:var(--heat-3)"></span>
+            <span class="legend-swatch" style="background:var(--heat-4)"></span>
+            <span>More</span>
+          </div>
+        </div>
       </div>
-      <div class="search-row">
-        <span style="font-weight:600;font-size:13.5px;color:var(--text-secondary)">Recents</span>
-        <input class="input search-input" id="note-search" placeholder="Search notes…" value="${esc(state.searchNotes)}" />
-      </div>
-      ${listHtml}
     </div>`;
 }
 
-function bindScratchpadEvents() {
-  if (state.activeNoteId !== null) {
-    const id = state.activeNoteId;
-    let saveTimer = null;
-    const scheduleSave = () => {
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(async () => {
-        const res = await api(`/api/scratchpad/${id}`, {
-          method: "PATCH",
-          body: { title: $("#note-title").value, content: $("#note-content").value },
-        });
-        const idx = state.notes.findIndex((n) => n.id === id);
-        if (idx >= 0) state.notes[idx] = res.item;
-      }, 300);
-    };
-    $("#note-title")?.addEventListener("input", scheduleSave);
-    $("#note-content")?.addEventListener("input", scheduleSave);
-    $("#btn-note-back")?.addEventListener("click", async () => {
-      clearTimeout(saveTimer);
-      await api(`/api/scratchpad/${id}`, {
-        method: "PATCH",
-        body: { title: $("#note-title").value, content: $("#note-content").value },
-      });
-      state.activeNoteId = null;
-      await loadTabData("scratchpad");
-      renderCanvas();
-    });
-    $("#btn-note-copy")?.addEventListener("click", async () => {
-      await api("/api/copy", { method: "POST", body: { text: $("#note-content").value } });
-      toast("Note copied to clipboard");
-    });
-    $("#btn-note-pin")?.addEventListener("click", async () => {
-      const note = state.notes.find((n) => n.id === id);
-      const res = await api(`/api/scratchpad/${id}`, { method: "PATCH", body: { pinned: !note.pinned } });
-      const idx = state.notes.findIndex((n) => n.id === id);
-      if (idx >= 0) state.notes[idx] = res.item;
-      renderCanvas();
-    });
-    $("#btn-note-del")?.addEventListener("click", async () => {
-      await api(`/api/scratchpad/${id}`, { method: "DELETE" });
-      state.activeNoteId = null;
-      await loadTabData("scratchpad");
-      renderCanvas();
-      toast("Note deleted");
-    });
-    return;
-  }
-
-  const createNote = async () => {
-    const res = await api("/api/scratchpad", { method: "POST", body: { title: "Untitled note", content: "" } });
-    state.notes.unshift(res.item);
-    state.activeNoteId = res.item.id;
-    renderCanvas();
-  };
-  $("#btn-new-note")?.addEventListener("click", createNote);
-  $("#btn-hero-note")?.addEventListener("click", createNote);
-  $$(".note-card").forEach((el) =>
-    el.addEventListener("click", () => {
-      state.activeNoteId = Number(el.dataset.nid);
-      renderCanvas();
-    })
-  );
-  let t = null;
-  $("#note-search")?.addEventListener("input", (e) => {
-    state.searchNotes = e.target.value;
-    clearTimeout(t);
-    t = setTimeout(async () => {
-      await loadTabData("scratchpad");
-      renderCanvas();
-    }, 180);
-  });
-}
-
-/* ==================== SETTINGS MODAL ==================== */
+/* ==================== SETTINGS SHEET ==================== */
 
 let modelsPollTimer = null;
-
 function stopModelsPolling() {
   if (modelsPollTimer) {
     clearInterval(modelsPollTimer);
@@ -996,7 +1169,7 @@ function renderSettingsContent() {
       ? installedWhisper
           .map((m) => `<option value="${esc(m.id)}" ${m.active ? "selected" : ""}>${esc(m.name)} (${esc(m.size_label)})</option>`)
           .join("")
-      : `<option value="">No models downloaded</option>`;
+      : `<option value="">No models installed</option>`;
     const langOpts = [
       ["en", "English"],
       ["auto", "Auto-detect"],
@@ -1009,64 +1182,73 @@ function renderSettingsContent() {
       .join("");
 
     el.innerHTML = `
-      <div class="setting-group">
-        <div class="setting-row">
+      <div class="pref-section-label">Input</div>
+      <div class="pref-group">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Hold-to-Talk Shortcut</div>
-            <div class="setting-desc">Hold <strong>${esc(state.appState.hotkey_label)}</strong> anywhere to dictate (Esc cancels).</div>
+            <div class="pref-title">Hold-to-Talk Shortcut</div>
+            <div class="pref-desc">Hold <strong>${esc(state.appState.hotkey_label)}</strong> anywhere to dictate. Press Esc to cancel.</div>
           </div>
-          <div class="setting-control">
-            <button class="btn btn-secondary" id="set-hotkey">Change</button>
+          <div class="pref-control">
+            <button class="btn btn-secondary btn-sm" id="set-hotkey">Change…</button>
           </div>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Microphone</div>
-            <div class="setting-desc">PipeWire audio source used for recording.</div>
+            <div class="pref-title">Microphone</div>
+            <div class="pref-desc">PipeWire audio input source.</div>
           </div>
-          <div class="setting-control">
+          <div class="pref-control">
             <select class="select" id="set-mic">${micOpts}</select>
           </div>
         </div>
-        <div class="setting-row">
+      </div>
+
+      <div class="pref-section-label">Transcription &amp; Intelligence</div>
+      <div class="pref-group">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Speech Model (Whisper)</div>
-            <div class="setting-desc">Local GGML model running on whisper-server.</div>
+            <div class="pref-title">Speech Model</div>
+            <div class="pref-desc">Local Whisper model running on CUDA.</div>
           </div>
-          <div class="setting-control" style="gap:8px;min-width:260px">
+          <div class="pref-control with-action">
             <select class="select" id="set-whisper">${whisperOpts}</select>
-            <button class="btn btn-secondary btn-sm" id="btn-goto-models" style="white-space:nowrap">More…</button>
+            <button class="btn btn-secondary btn-sm" id="btn-goto-models">Manage…</button>
           </div>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Speech Language</div>
-            <div class="setting-desc">Whisper transcription language.</div>
+            <div class="pref-title">Language</div>
+            <div class="pref-desc">Spoken dictation language.</div>
           </div>
-          <div class="setting-control">
+          <div class="pref-control">
             <select class="select" id="set-lang">${langOpts}</select>
           </div>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">AI Cleanup</div>
-            <div class="setting-desc">Active: <strong>${esc(state.appState.llm_provider_label)}</strong> · <code>${esc(state.appState.llm_active_model)}</code></div>
+            <div class="pref-title">AI Cleanup</div>
+            <div class="pref-desc">${esc(state.appState.llm_provider_label)} · <code>${esc(state.appState.llm_active_model)}</code></div>
           </div>
-          <div class="setting-control" style="gap:10px;align-items:center">
+          <div class="pref-control">
             <button class="btn btn-secondary btn-sm" id="btn-goto-llm">Configure…</button>
             <label class="switch"><input type="checkbox" id="set-llm-en" ${cfg.llm.enabled ? "checked" : ""}/><span class="slider"></span></label>
           </div>
         </div>
-        <div class="setting-row">
+      </div>
+
+      <div class="pref-section-label">Appearance</div>
+      <div class="pref-group">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Theme</div>
-            <div class="setting-desc">Dark mode default with optional warm light theme.</div>
+            <div class="pref-title">Theme</div>
+            <div class="pref-desc">Switch between Dark and Light appearance.</div>
           </div>
-          <div class="setting-control">
-            <select class="select" id="set-theme">
-              <option value="dark" ${cfg.ui.theme !== "light" ? "selected" : ""}>Dark</option>
-              <option value="light" ${cfg.ui.theme === "light" ? "selected" : ""}>Light</option>
-            </select>
+          <div class="pref-control">
+            <div class="segmented">
+              <button class="seg-btn theme-seg ${cfg.ui.theme !== "light" ? "active" : ""}" data-theme-val="dark">Dark</button>
+              <button class="seg-btn theme-seg ${cfg.ui.theme === "light" ? "active" : ""}" data-theme-val="light">Light</button>
+            </div>
           </div>
         </div>
       </div>`;
@@ -1084,11 +1266,11 @@ function renderSettingsContent() {
         } else {
           toast("Hotkey capture cancelled");
           btn.disabled = false;
-          btn.textContent = "Change";
+          btn.textContent = "Change…";
         }
       } catch {
         btn.disabled = false;
-        btn.textContent = "Change";
+        btn.textContent = "Change…";
       }
     });
     $("#set-mic").addEventListener("change", (e) => saveSetting({ audio: { device: e.target.value } }));
@@ -1099,98 +1281,190 @@ function renderSettingsContent() {
       await refreshState();
       toast("Switching Whisper model…");
     });
-    $("#btn-goto-models").addEventListener("click", () => {
-      state.settingsTab = "models";
-      renderSettingsContent();
-    });
-    $("#btn-goto-llm").addEventListener("click", () => {
-      state.settingsTab = "llm";
-      renderSettingsContent();
-    });
+    $("#btn-goto-models").addEventListener("click", () => { state.settingsTab = "models"; renderSettingsContent(); });
+    $("#btn-goto-llm").addEventListener("click", () => { state.settingsTab = "llm"; renderSettingsContent(); });
     $("#set-lang").addEventListener("change", (e) => saveSetting({ stt: { language: e.target.value } }));
     $("#set-llm-en").addEventListener("change", (e) => saveSetting({ llm: { enabled: e.target.checked } }));
-    $("#set-theme").addEventListener("change", (e) => saveSetting({ ui: { theme: e.target.value } }));
+    $$(".theme-seg").forEach((b) =>
+      b.addEventListener("click", async () => {
+        await saveSetting({ ui: { theme: b.dataset.themeVal } });
+        renderSettingsContent();
+      })
+    );
+  } else if (state.settingsTab === "models") {
+    const models = res.whisper_models || [];
+    const anyDownloading = models.some((m) => m.downloading);
+
+    el.innerHTML = `
+      <div class="pref-desc" style="margin-bottom:14px">
+        Download and switch between local Whisper GGML models. Turbo and Large models excel on GPUs; Base and Tiny run smoothly on CPU.
+      </div>
+      <div class="model-list">
+        ${models
+          .map((m) => {
+            let act = "";
+            if (m.downloading) {
+              act = `<button class="btn btn-secondary btn-sm mdl-cancel" data-id="${esc(m.id)}">Cancel</button>`;
+            } else if (m.active) {
+              act = `<span class="pill-tag success">Active</span>`;
+            } else if (m.installed) {
+              act = `<button class="btn btn-primary btn-sm mdl-use" data-id="${esc(m.id)}">Use</button>
+                     <button class="action-chip danger mdl-del" data-id="${esc(m.id)}">Delete</button>`;
+            } else {
+              act = `<button class="btn btn-secondary btn-sm mdl-dl" data-id="${esc(m.id)}">Download</button>`;
+            }
+
+            const prog = m.downloading
+              ? `<div class="progress-row">
+                   <div class="progress-track"><div class="progress-fill" style="width:${m.progress}%"></div></div>
+                   <span class="progress-text">${m.progress}% · ${m.downloaded_mb} / ${m.total_mb} MB</span>
+                 </div>`
+              : m.error
+              ? `<div style="font-size:12px;color:var(--danger)">Download error: ${esc(m.error)}</div>`
+              : "";
+
+            return `
+              <div class="model-row ${m.active ? "active" : ""}">
+                <div class="model-row-top">
+                  <div>
+                    <div class="model-title-line">
+                      <span class="model-name">${esc(m.name)}</span>
+                      <span class="pill-tag ${m.recommended ? "accent" : ""}">${esc(m.badge)}</span>
+                    </div>
+                    <div class="model-meta">${esc(m.size_label)} · ${esc(m.languages)} — ${esc(m.description)}</div>
+                  </div>
+                  <div class="model-actions">${act}</div>
+                </div>
+                ${prog}
+              </div>`;
+          })
+          .join("")}
+      </div>`;
+
+    $$(".mdl-dl").forEach((b) =>
+      b.addEventListener("click", async () => {
+        try {
+          await api("/api/models/download", { method: "POST", body: { id: b.dataset.id } });
+          state.resources = await api("/api/system/resources");
+          renderSettingsContent();
+          toast("Download started");
+        } catch (err) { toast(err.message); }
+      })
+    );
+    $$(".mdl-cancel").forEach((b) =>
+      b.addEventListener("click", async () => {
+        await api("/api/models/cancel", { method: "POST", body: { id: b.dataset.id } });
+        state.resources = await api("/api/system/resources");
+        renderSettingsContent();
+        toast("Download cancelled");
+      })
+    );
+    $$(".mdl-use").forEach((b) =>
+      b.addEventListener("click", async () => {
+        try {
+          await api("/api/models/select", { method: "POST", body: { id: b.dataset.id } });
+          state.resources = await api("/api/system/resources");
+          await refreshState();
+          renderSettingsContent();
+          toast("Switching Whisper model…");
+        } catch (err) { toast(err.message); }
+      })
+    );
+    $$(".mdl-del").forEach((b) =>
+      b.addEventListener("click", async () => {
+        try {
+          await api(`/api/models/${encodeURIComponent(b.dataset.id)}`, { method: "DELETE" });
+          state.resources = await api("/api/system/resources");
+          renderSettingsContent();
+          toast("Model deleted");
+        } catch (err) { toast(err.message); }
+      })
+    );
+
+    if (anyDownloading) {
+      modelsPollTimer = setInterval(async () => {
+        try {
+          const data = await api("/api/models");
+          if (state.resources) state.resources.whisper_models = data.items;
+          if (state.settingsTab === "models" && !$("#settings-modal").classList.contains("hidden")) {
+            renderSettingsContent();
+          } else stopModelsPolling();
+        } catch { stopModelsPolling(); }
+      }, 600);
+    }
   } else if (state.settingsTab === "llm") {
     const cat = state.llmCatalog || { ollama: { reachable: false, items: [] }, cloud: {} };
     const provider = cfg.llm.provider || "ollama";
     const providers = [
-      ["ollama", "Ollama (Local)"],
+      ["ollama", "Ollama"],
       ["gemini", "Gemini"],
       ["claude", "Claude"],
       ["openai", "OpenAI"],
-      ["openai_compatible", "OpenAI-Compatible"],
+      ["openai_compatible", "OpenAI-Compat"],
     ];
 
-    let providerBody = "";
+    let body = "";
     let anyPulling = false;
 
     if (provider === "ollama") {
       const items = cat.ollama?.items || [];
       anyPulling = items.some((m) => m.pulling);
-      providerBody = `
-        <div class="setting-group">
-          <div class="setting-row">
+      body = `
+        <div class="pref-group">
+          <div class="pref-row">
             <div>
-              <div class="setting-title">Ollama Server URL</div>
-              <div class="setting-desc">${cat.ollama?.reachable ? "Connected to local Ollama" : "Ollama not reachable at this URL"}</div>
+              <div class="pref-title">Ollama Server</div>
+              <div class="pref-desc">${cat.ollama?.reachable ? "Connected locally" : "Not reachable at this URL"}</div>
             </div>
-            <div class="setting-control" style="min-width:220px">
-              <input class="input" id="llm-ollama-url" value="${esc(cfg.llm.base_url)}" />
-            </div>
+            <div class="pref-control"><input class="input" id="llm-ollama-url" value="${esc(cfg.llm.base_url)}" /></div>
           </div>
-          <div class="setting-row">
+          <div class="pref-row">
             <div>
-              <div class="setting-title">Disable Thinking Tokens (Faster)</div>
-              <div class="setting-desc">Recommended for Qwen3 models (~400ms instead of 5–10s).</div>
+              <div class="pref-title">Low-Latency Mode (Disable Thinking)</div>
+              <div class="pref-desc">Recommended for Qwen3 models (~400 ms instead of several seconds).</div>
             </div>
             <label class="switch"><input type="checkbox" id="llm-nothink" ${!cfg.llm.think ? "checked" : ""}/><span class="slider"></span></label>
           </div>
-          <div class="setting-row">
+          <div class="pref-row">
             <div>
-              <div class="setting-title">Pull Custom Ollama Tag</div>
-              <div class="setting-desc">Download any model from ollama.com (e.g. <code>mistral:7b</code>).</div>
+              <div class="pref-title">Pull Custom Tag</div>
+              <div class="pref-desc">Any model tag from Ollama (e.g. <code>mistral:7b</code>).</div>
             </div>
-            <div class="setting-control inline-row" style="min-width:250px">
-              <input class="input" id="llm-custom-pull" placeholder="e.g. qwen3:4b" />
-              <button class="btn btn-secondary btn-sm" id="btn-custom-pull" style="white-space:nowrap">Pull</button>
+            <div class="pref-control">
+              <input class="input" id="llm-custom-pull" style="width:150px" placeholder="qwen3:4b" />
+              <button class="btn btn-secondary btn-sm" id="btn-custom-pull">Pull</button>
             </div>
           </div>
         </div>
 
-        <div style="font-size:12px;font-weight:700;letter-spacing:0.06em;color:var(--text-muted);text-transform:uppercase;margin:14px 0 8px">
-          Local Ollama Models (by VRAM)
-        </div>
+        <div class="pref-section-label">Local Models by VRAM</div>
         <div class="model-list">
           ${items
             .map((m) => {
               let act = "";
-              if (m.pulling) {
-                act = `<button class="btn btn-secondary btn-sm ol-cancel" data-m="${esc(m.name)}">Cancel</button>`;
-              } else if (m.active) {
-                act = `<span class="model-badge active-pill">Active</span>`;
-              } else if (m.installed) {
-                act = `
-                  <button class="btn btn-primary btn-sm ol-use" data-m="${esc(m.name)}">Use</button>
-                  <button class="btn btn-secondary btn-sm ol-del" data-m="${esc(m.name)}" title="Delete">✕</button>`;
-              } else {
-                act = `<button class="btn btn-secondary btn-sm ol-pull" data-m="${esc(m.name)}">Pull</button>`;
-              }
+              if (m.pulling) act = `<button class="btn btn-secondary btn-sm ol-cancel" data-m="${esc(m.name)}">Cancel</button>`;
+              else if (m.active) act = `<span class="pill-tag success">Active</span>`;
+              else if (m.installed)
+                act = `<button class="btn btn-primary btn-sm ol-use" data-m="${esc(m.name)}">Use</button>
+                       <button class="action-chip danger ol-del" data-m="${esc(m.name)}">Delete</button>`;
+              else act = `<button class="btn btn-secondary btn-sm ol-pull" data-m="${esc(m.name)}">Pull</button>`;
+
               const prog = m.pulling
-                ? `<div class="model-progress-wrap">
-                     <div class="model-progress-track"><div class="model-progress-fill" style="width:${m.progress}%"></div></div>
-                     <span class="model-progress-label">${m.progress}% · ${esc(m.status || "pulling")}</span>
+                ? `<div class="progress-row">
+                     <div class="progress-track"><div class="progress-fill" style="width:${m.progress}%"></div></div>
+                     <span class="progress-text">${m.progress}% · ${esc(m.status || "pulling")}</span>
                    </div>`
                 : m.error
                 ? `<div style="font-size:12px;color:var(--danger)">Pull error: ${esc(m.error)}</div>`
                 : "";
               return `
-                <div class="model-card ${m.active ? "active" : ""}">
-                  <div class="model-card-top">
+                <div class="model-row ${m.active ? "active" : ""}">
+                  <div class="model-row-top">
                     <div>
-                      <div class="model-title-row">
+                      <div class="model-title-line">
                         <span class="model-name">${esc(m.name)}</span>
-                        <span class="model-badge rec">${esc(m.vram)}</span>
-                        <span class="model-badge">${esc(m.badge)}</span>
+                        <span class="pill-tag accent">${esc(m.vram)}</span>
+                        <span class="pill-tag">${esc(m.badge)}</span>
                       </div>
                       <div class="model-meta">${esc(m.size_label)} — ${esc(m.description)}</div>
                     </div>
@@ -1202,10 +1476,8 @@ function renderSettingsContent() {
             .join("")}
         </div>`;
     } else if (provider === "gemini" || provider === "claude" || provider === "openai") {
-      const keyField = `${provider}_api_key`;
-      const modelField = `${provider}_model`;
-      const curKey = cfg.llm[keyField] || "";
-      const curModel = cfg.llm[modelField] || "";
+      const curKey = cfg.llm[`${provider}_api_key`] || "";
+      const curModel = cfg.llm[`${provider}_model`] || "";
       const suggested = cat.cloud?.[provider]?.models || [];
       const inList = suggested.some((m) => m.id === curModel);
       const opts = [
@@ -1213,109 +1485,94 @@ function renderSettingsContent() {
         `<option value="__custom__" ${!inList ? "selected" : ""}>Custom model ID…</option>`,
       ].join("");
 
-      const keyHints = {
-        gemini: "Get a key at aistudio.google.com — stored locally in ~/.config/voxbox/config.toml (chmod 600).",
-        claude: "Get a key at console.anthropic.com — stored locally in ~/.config/voxbox/config.toml (chmod 600).",
-        openai: "Get a key at platform.openai.com — stored locally in ~/.config/voxbox/config.toml (chmod 600).",
-      };
-
-      providerBody = `
-        <div class="setting-group">
-          <div class="setting-row">
-            <div style="flex:1">
-              <div class="setting-title">${esc(cat.cloud?.[provider]?.label || provider)} API Key</div>
-              <div class="setting-desc">${keyHints[provider]}</div>
-              <div class="inline-row" style="margin-top:8px">
-                <input type="password" class="input" id="llm-cloud-key" value="${esc(curKey)}" placeholder="Paste API key…" />
-                <button class="btn btn-secondary btn-sm" id="btn-toggle-key">Show</button>
-              </div>
+      body = `
+        <div class="pref-group">
+          <div class="pref-row stacked">
+            <div>
+              <div class="pref-title">${esc(cat.cloud?.[provider]?.label || provider)} API Key</div>
+              <div class="pref-desc">Stored locally in <code>~/.config/voxbox/config.toml</code> with owner-only permissions (0600).</div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <input type="password" class="input" id="llm-cloud-key" value="${esc(curKey)}" placeholder="Paste API key…" />
+              <button class="btn btn-secondary btn-sm" id="btn-toggle-key">Show</button>
             </div>
           </div>
-          <div class="setting-row">
+          <div class="pref-row">
             <div>
-              <div class="setting-title">Model</div>
-              <div class="setting-desc">Pick a fast recommended model or enter any custom model ID.</div>
+              <div class="pref-title">Model</div>
+              <div class="pref-desc">Select a fast recommended model or enter a custom ID.</div>
             </div>
-            <div class="setting-control" style="min-width:250px">
-              <select class="select" id="llm-cloud-select">${opts}</select>
-            </div>
+            <div class="pref-control"><select class="select" id="llm-cloud-select" style="width:240px">${opts}</select></div>
           </div>
-          <div class="setting-row ${inList ? "hidden" : ""}" id="llm-custom-model-row">
-            <div>
-              <div class="setting-title">Custom Model ID</div>
-              <div class="setting-desc">Exact API model identifier.</div>
-            </div>
-            <div class="setting-control" style="min-width:250px">
-              <input class="input" id="llm-cloud-custom" value="${esc(curModel)}" placeholder="Model ID" />
-            </div>
+          <div class="pref-row ${inList ? "hidden" : ""}" id="llm-custom-model-row">
+            <div><div class="pref-title">Custom Model ID</div></div>
+            <div class="pref-control"><input class="input" id="llm-cloud-custom" style="width:240px" value="${esc(curModel)}" placeholder="Model ID" /></div>
           </div>
         </div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px">
-          <button class="btn btn-primary" id="btn-save-cloud">Save ${esc(cat.cloud?.[provider]?.label || provider)} settings</button>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+          <button class="btn btn-primary" id="btn-save-cloud">Save Settings</button>
         </div>`;
     } else {
       const presets = cat.cloud?.openai_compatible?.presets || [];
-      providerBody = `
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Quick presets (click to fill Base URL &amp; suggested model):</div>
+      body = `
         <div class="preset-row">
           ${presets.map((p, idx) => `<button class="preset-chip compat-preset" data-idx="${idx}">${esc(p.name)}</button>`).join("")}
         </div>
-        <div class="setting-group">
-          <div class="setting-row">
-            <div style="flex:1">
-              <div class="setting-title">Base URL</div>
-              <div class="setting-desc">Any OpenAI-compatible <code>/v1</code> endpoint (Groq, OpenRouter, DeepSeek, vLLM, LM Studio…).</div>
-              <input class="input" id="llm-compat-url" style="margin-top:8px" value="${esc(cfg.llm.compat_base_url)}" placeholder="https://api.groq.com/openai/v1" />
+        <div class="pref-group">
+          <div class="pref-row stacked">
+            <div>
+              <div class="pref-title">Base URL</div>
+              <div class="pref-desc">Any OpenAI-compatible <code>/v1</code> endpoint.</div>
+            </div>
+            <input class="input" id="llm-compat-url" value="${esc(cfg.llm.compat_base_url)}" placeholder="https://api.groq.com/openai/v1" />
+          </div>
+          <div class="pref-row stacked">
+            <div>
+              <div class="pref-title">API Key</div>
+              <div class="pref-desc">Optional for local servers like LM Studio or vLLM.</div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <input type="password" class="input" id="llm-compat-key" value="${esc(cfg.llm.compat_api_key)}" placeholder="Paste API key…" />
+              <button class="btn btn-secondary btn-sm" id="btn-toggle-key">Show</button>
             </div>
           </div>
-          <div class="setting-row">
-            <div style="flex:1">
-              <div class="setting-title">API Key</div>
-              <div class="setting-desc">Leave blank for unauthenticated local servers (e.g. LM Studio / vLLM).</div>
-              <div class="inline-row" style="margin-top:8px">
-                <input type="password" class="input" id="llm-compat-key" value="${esc(cfg.llm.compat_api_key)}" placeholder="Paste API key…" />
-                <button class="btn btn-secondary btn-sm" id="btn-toggle-key">Show</button>
-              </div>
-            </div>
-          </div>
-          <div class="setting-row">
-            <div style="flex:1">
-              <div class="setting-title">Model ID</div>
-              <div class="setting-desc">Exact model string expected by this endpoint.</div>
-              <input class="input" id="llm-compat-model" style="margin-top:8px" value="${esc(cfg.llm.compat_model)}" placeholder="e.g. llama-3.3-70b-versatile" />
-            </div>
+          <div class="pref-row stacked">
+            <div><div class="pref-title">Model ID</div></div>
+            <input class="input" id="llm-compat-model" value="${esc(cfg.llm.compat_model)}" placeholder="llama-3.3-70b-versatile" />
           </div>
         </div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px">
-          <button class="btn btn-primary" id="btn-save-compat">Save provider settings</button>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+          <button class="btn btn-primary" id="btn-save-compat">Save Settings</button>
         </div>`;
     }
 
     el.innerHTML = `
-      <div class="setting-group">
-        <div class="setting-row">
+      <div class="pref-group">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Enable AI Cleanup</div>
-            <div class="setting-desc">Remove filler words, fix self-corrections &amp; punctuation after Whisper transcribes.</div>
+            <div class="pref-title">Enable AI Cleanup</div>
+            <div class="pref-desc">Remove fillers, resolve self-corrections, and polish punctuation after Whisper transcribes.</div>
           </div>
           <label class="switch"><input type="checkbox" id="llm-master-en" ${cfg.llm.enabled ? "checked" : ""}/><span class="slider"></span></label>
         </div>
       </div>
 
-      <div class="provider-pills">
-        ${providers.map(([k, lbl]) => `<button class="provider-pill ${provider === k ? "active" : ""}" data-prov="${k}">${esc(lbl)}</button>`).join("")}
+      <div style="margin-bottom:16px">
+        <div class="segmented" style="flex-wrap:wrap">
+          ${providers.map(([k, lbl]) => `<button class="seg-btn prov-seg ${provider === k ? "active" : ""}" data-prov="${k}">${esc(lbl)}</button>`).join("")}
+        </div>
       </div>
 
-      ${providerBody}
+      ${body}
 
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px">
-        <span style="font-size:12.5px;color:var(--text-secondary)">Verify your active provider &amp; measure latency:</span>
-        <button class="btn btn-secondary" id="btn-test-llm">Test Cleanup</button>
+        <span class="pref-desc" style="margin:0">Test your active provider and measure cleanup latency.</span>
+        <button class="btn btn-secondary btn-sm" id="btn-test-llm">Test Cleanup</button>
       </div>
       <div class="test-result hidden" id="llm-test-out"></div>`;
 
     $("#llm-master-en").addEventListener("change", (e) => saveSetting({ llm: { enabled: e.target.checked } }));
-    $$(".provider-pill").forEach((b) =>
+    $$(".prov-seg").forEach((b) =>
       b.addEventListener("click", async () => {
         await api("/api/settings", { method: "POST", body: { llm: { provider: b.dataset.prov } } });
         state.llmCatalog = await api("/api/llm/catalog");
@@ -1323,7 +1580,6 @@ function renderSettingsContent() {
         renderSettingsContent();
       })
     );
-
     $("#btn-toggle-key")?.addEventListener("click", (e) => {
       const inp = $("#llm-cloud-key") || $("#llm-compat-key");
       if (!inp) return;
@@ -1379,24 +1635,16 @@ function renderSettingsContent() {
             state.llmCatalog = await api("/api/llm/catalog");
             renderSettingsContent();
             toast(`Deleted ${b.dataset.m}`);
-          } catch (err) {
-            toast(err.message);
-          }
+          } catch (err) { toast(err.message); }
         })
       );
-
       if (anyPulling) {
         modelsPollTimer = setInterval(async () => {
           try {
             state.llmCatalog = await api("/api/llm/catalog");
-            if (state.settingsTab === "llm" && !$("#settings-modal").classList.contains("hidden")) {
-              renderSettingsContent();
-            } else {
-              stopModelsPolling();
-            }
-          } catch {
-            stopModelsPolling();
-          }
+            if (state.settingsTab === "llm" && !$("#settings-modal").classList.contains("hidden")) renderSettingsContent();
+            else stopModelsPolling();
+          } catch { stopModelsPolling(); }
         }, 700);
       }
     } else if (provider === "gemini" || provider === "claude" || provider === "openai") {
@@ -1408,8 +1656,7 @@ function renderSettingsContent() {
       $("#btn-save-cloud")?.addEventListener("click", async () => {
         const selVal = $("#llm-cloud-select").value;
         const chosenModel = selVal === "__custom__" ? $("#llm-cloud-custom").value.trim() : selVal;
-        const keyVal = $("#llm-cloud-key").value.trim();
-        await saveSetting({ llm: { provider, [`${provider}_api_key`]: keyVal, [`${provider}_model`]: chosenModel } });
+        await saveSetting({ llm: { provider, [`${provider}_api_key`]: $("#llm-cloud-key").value.trim(), [`${provider}_model`]: chosenModel } });
       });
     } else {
       const presets = cat.cloud?.openai_compatible?.presets || [];
@@ -1419,7 +1666,7 @@ function renderSettingsContent() {
           if (!p) return;
           $("#llm-compat-url").value = p.base_url;
           $("#llm-compat-model").value = p.model;
-          toast(`Loaded ${p.name} preset — paste your API key and Save`);
+          toast(`Loaded ${p.name} preset`);
         })
       );
       $("#btn-save-compat")?.addEventListener("click", async () => {
@@ -1445,127 +1692,15 @@ function renderSettingsContent() {
       try {
         const r = await api("/api/llm/test", { method: "POST" });
         box.className = "test-result ok";
-        box.innerHTML = `<strong>✓ ${esc(r.provider)} · ${esc(r.model)} (${r.latency_ms} ms)</strong><div style="margin-top:4px;color:var(--text-primary)">${esc(r.result)}</div>`;
+        box.innerHTML = `<strong style="color:var(--text-primary)">${esc(r.provider)} · ${esc(r.model)} · ${r.latency_ms} ms</strong><div style="margin-top:4px;color:var(--text-primary)">${esc(r.result)}</div>`;
       } catch (err) {
         box.className = "test-result err";
-        box.textContent = `✗ ${err.message}`;
+        box.textContent = err.message;
       } finally {
         btn.disabled = false;
         btn.textContent = "Test Cleanup";
       }
     });
-  } else if (state.settingsTab === "models") {
-    const models = res.whisper_models || [];
-    const anyDownloading = models.some((m) => m.downloading);
-
-    el.innerHTML = `
-      <p style="margin:0 0 14px;font-size:13px;color:var(--text-secondary)">
-        Download and switch between local Whisper GGML models. Smaller models run fast on CPU; Turbo and Large v3 shine on GPU.
-      </p>
-      <div class="model-list">
-        ${models
-          .map((m) => {
-            let actionHtml = "";
-            if (m.downloading) {
-              actionHtml = `<button class="btn btn-secondary btn-sm mdl-cancel" data-id="${esc(m.id)}">Cancel</button>`;
-            } else if (m.active) {
-              actionHtml = `<span class="model-badge active-pill">Active</span>`;
-            } else if (m.installed) {
-              actionHtml = `
-                <button class="btn btn-primary btn-sm mdl-use" data-id="${esc(m.id)}">Use</button>
-                <button class="btn btn-secondary btn-sm mdl-del" data-id="${esc(m.id)}" title="Delete model">✕</button>`;
-            } else {
-              actionHtml = `<button class="btn btn-secondary btn-sm mdl-dl" data-id="${esc(m.id)}">Download</button>`;
-            }
-
-            const progressHtml = m.downloading
-              ? `<div class="model-progress-wrap">
-                   <div class="model-progress-track"><div class="model-progress-fill" style="width:${m.progress}%"></div></div>
-                   <span class="model-progress-label">${m.progress}% · ${m.downloaded_mb} / ${m.total_mb} MB</span>
-                 </div>`
-              : m.error
-              ? `<div style="font-size:12px;color:var(--danger)">Download error: ${esc(m.error)}</div>`
-              : "";
-
-            return `
-              <div class="model-card ${m.active ? "active" : ""}">
-                <div class="model-card-top">
-                  <div>
-                    <div class="model-title-row">
-                      <span class="model-name">${esc(m.name)}</span>
-                      <span class="model-badge ${m.recommended ? "rec" : ""}">${esc(m.badge)}</span>
-                    </div>
-                    <div class="model-meta">${esc(m.size_label)} · ${esc(m.languages)} — ${esc(m.description)}</div>
-                  </div>
-                  <div class="model-actions">${actionHtml}</div>
-                </div>
-                ${progressHtml}
-              </div>`;
-          })
-          .join("")}
-      </div>`;
-
-    $$(".mdl-dl").forEach((b) =>
-      b.addEventListener("click", async () => {
-        try {
-          await api("/api/models/download", { method: "POST", body: { id: b.dataset.id } });
-          state.resources = await api("/api/system/resources");
-          renderSettingsContent();
-          toast("Download started");
-        } catch (err) {
-          toast(err.message);
-        }
-      })
-    );
-    $$(".mdl-cancel").forEach((b) =>
-      b.addEventListener("click", async () => {
-        await api("/api/models/cancel", { method: "POST", body: { id: b.dataset.id } });
-        state.resources = await api("/api/system/resources");
-        renderSettingsContent();
-        toast("Download cancelled");
-      })
-    );
-    $$(".mdl-use").forEach((b) =>
-      b.addEventListener("click", async () => {
-        try {
-          await api("/api/models/select", { method: "POST", body: { id: b.dataset.id } });
-          state.resources = await api("/api/system/resources");
-          await refreshState();
-          renderSettingsContent();
-          toast("Switching Whisper model…");
-        } catch (err) {
-          toast(err.message);
-        }
-      })
-    );
-    $$(".mdl-del").forEach((b) =>
-      b.addEventListener("click", async () => {
-        try {
-          await api(`/api/models/${encodeURIComponent(b.dataset.id)}`, { method: "DELETE" });
-          state.resources = await api("/api/system/resources");
-          renderSettingsContent();
-          toast("Model deleted");
-        } catch (err) {
-          toast(err.message);
-        }
-      })
-    );
-
-    if (anyDownloading) {
-      modelsPollTimer = setInterval(async () => {
-        try {
-          const data = await api("/api/models");
-          if (state.resources) state.resources.whisper_models = data.items;
-          if (state.settingsTab === "models" && !$("#settings-modal").classList.contains("hidden")) {
-            renderSettingsContent();
-          } else {
-            stopModelsPolling();
-          }
-        } catch {
-          stopModelsPolling();
-        }
-      }, 600);
-    }
   } else if (state.settingsTab === "system") {
     const pasteOpts = [
       ["shift_insert", "Shift + Insert (GUI & Terminals)"],
@@ -1578,46 +1713,51 @@ function renderSettingsContent() {
       .join("");
 
     el.innerHTML = `
-      <div class="setting-group">
-        <div class="setting-row">
+      <div class="pref-section-label">Desktop Integration</div>
+      <div class="pref-group">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Launch VoxBox at login</div>
-            <div class="setting-desc">Controls <code>voxbox.service</code> in systemd user session.</div>
+            <div class="pref-title">Launch at Login</div>
+            <div class="pref-desc">Starts <code>voxbox.service</code> automatically with your session.</div>
           </div>
           <label class="switch"><input type="checkbox" id="set-autostart" ${res.autostart ? "checked" : ""}/><span class="slider"></span></label>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Show Floating Bar at all times</div>
-            <div class="setting-desc">Keep the thin translucent bar anchored at bottom-center when idle.</div>
+            <div class="pref-title">Show Floating Bar at All Times</div>
+            <div class="pref-desc">Keep the minimal bar anchored at bottom-center when idle.</div>
           </div>
           <label class="switch"><input type="checkbox" id="set-bar" ${cfg.ui.show_flow_bar ? "checked" : ""}/><span class="slider"></span></label>
         </div>
-        <div class="setting-row">
+      </div>
+
+      <div class="pref-section-label">Audio &amp; Insertion</div>
+      <div class="pref-group">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Dictation sounds</div>
-            <div class="setting-desc">Play subtle start, stop, and cancel audio chimes.</div>
+            <div class="pref-title">Dictation Sounds</div>
+            <div class="pref-desc">Subtle chimes when recording starts, stops, or cancels.</div>
           </div>
           <label class="switch"><input type="checkbox" id="set-sounds" ${cfg.audio.sound_effects ? "checked" : ""}/><span class="slider"></span></label>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Mute system audio while dictating</div>
-            <div class="setting-desc">Temporarily mutes speakers via PipeWire while you hold the hotkey.</div>
+            <div class="pref-title">Mute System Audio While Dictating</div>
+            <div class="pref-desc">Temporarily mutes output via PipeWire while recording.</div>
           </div>
           <label class="switch"><input type="checkbox" id="set-mute" ${cfg.audio.mute_while_dictating ? "checked" : ""}/><span class="slider"></span></label>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Paste method</div>
-            <div class="setting-desc">How VoxBox injects cleaned text into your focused window.</div>
+            <div class="pref-title">Paste Method</div>
+            <div class="pref-desc">How VoxBox inserts text into the focused window.</div>
           </div>
-          <div class="setting-control"><select class="select" id="set-paste">${pasteOpts}</select></div>
+          <div class="pref-control"><select class="select" id="set-paste">${pasteOpts}</select></div>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Append trailing space</div>
-            <div class="setting-desc">Useful for continuous sentence-by-sentence dictation.</div>
+            <div class="pref-title">Append Trailing Space</div>
+            <div class="pref-desc">Adds a space after pasted text for continuous dictation.</div>
           </div>
           <label class="switch"><input type="checkbox" id="set-space" ${cfg.paste.trailing_space ? "checked" : ""}/><span class="slider"></span></label>
         </div>
@@ -1634,44 +1774,44 @@ function renderSettingsContent() {
     $("#set-space").addEventListener("change", (e) => saveSetting({ paste: { trailing_space: e.target.checked } }));
   } else if (state.settingsTab === "notetaker") {
     el.innerHTML = `
-      <div class="setting-group">
-        <div class="setting-row">
+      <div class="pref-group">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Meeting Notetaker (Phase 2)</div>
-            <div class="setting-desc">Will capture both your microphone and PipeWire system audio monitor for calls, transcribe locally on CUDA, and summarize via Ollama.</div>
+            <div class="pref-title">Meeting Notetaker</div>
+            <div class="pref-desc">Planned for Phase 2: dual-stream mic + PipeWire speaker capture, speaker-separated local transcripts, and AI call summaries.</div>
           </div>
-          <span class="brand-badge">Planned</span>
+          <span class="pill-tag accent">Planned</span>
         </div>
       </div>`;
   } else {
     const paths = state.appState.paths;
     el.innerHTML = `
-      <div class="setting-group">
-        <div class="setting-row">
+      <div class="pref-group">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">100% Local &amp; Offline</div>
-            <div class="setting-desc">Audio never leaves your machine. Everything runs on your GPU via local whisper-server and Ollama.</div>
+            <div class="pref-title">Local-First Architecture</div>
+            <div class="pref-desc">Speech recognition always runs locally on your machine. Cloud APIs are only called if you explicitly configure one in AI Cleanup.</div>
           </div>
-          <span class="brand-badge">Offline</span>
+          <span class="pill-tag success">Private</span>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Config Folder</div>
-            <div class="setting-desc"><code>${esc(paths.config)}</code></div>
+            <div class="pref-title">Configuration</div>
+            <div class="pref-desc"><code>${esc(paths.config)}</code></div>
           </div>
-          <button class="btn btn-secondary btn-sm" id="btn-open-cfg-dir">Open</button>
+          <button class="btn btn-secondary btn-sm" id="btn-open-cfg-dir">Reveal</button>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Data &amp; Logs Folder</div>
-            <div class="setting-desc"><code>${esc(paths.data)}</code></div>
+            <div class="pref-title">Database &amp; Logs</div>
+            <div class="pref-desc"><code>${esc(paths.data)}</code></div>
           </div>
-          <button class="btn btn-secondary btn-sm" id="btn-open-data-dir">Open</button>
+          <button class="btn btn-secondary btn-sm" id="btn-open-data-dir">Reveal</button>
         </div>
-        <div class="setting-row">
+        <div class="pref-row">
           <div>
-            <div class="setting-title">Clear Dictation History</div>
-            <div class="setting-desc">Deletes all saved dictation history from SQLite (keeps Dictionary, Snippets &amp; Scratchpad).</div>
+            <div class="pref-title">Clear Dictation History</div>
+            <div class="pref-desc">Permanently removes saved dictation entries while keeping your Dictionary, Snippets, and Scratchpad.</div>
           </div>
           <button class="btn btn-danger btn-sm" id="btn-clear-hist">Clear History</button>
         </div>
@@ -1682,7 +1822,7 @@ function renderSettingsContent() {
     $("#btn-clear-hist").addEventListener("click", async () => {
       await api("/api/dictations/clear", { method: "POST" });
       await loadTabData(state.tab);
-      renderCanvas();
+      renderCurrentView();
       toast("History cleared");
     });
   }
@@ -1691,11 +1831,11 @@ function renderSettingsContent() {
 async function saveSetting(patch) {
   await api("/api/settings", { method: "POST", body: patch });
   await refreshState();
-  renderCanvas();
+  renderCurrentView();
   toast("Saved");
 }
 
-/* ==================== FORM MODAL ==================== */
+/* ==================== SHEET DIALOG ==================== */
 
 function openFormModal(title, bodyHtml, onSave) {
   $("#form-modal-title").textContent = title;
@@ -1709,12 +1849,11 @@ function closeFormModal() {
   $("#form-modal").classList.add("hidden");
 }
 
-/* ==================== BOOTSTRAP ==================== */
+/* ==================== BOOTSTRAP & KEYBOARD SHORTCUTS ==================== */
 
 async function init() {
   $$("#sidebar-nav .nav-item").forEach((btn) => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
   $("#btn-open-settings").addEventListener("click", () => openSettingsModal("general"));
-  $("#btn-topbar-settings").addEventListener("click", () => openSettingsModal("general"));
   $("#btn-close-settings").addEventListener("click", closeSettingsModal);
   $("#btn-close-form").addEventListener("click", closeFormModal);
   $("#settings-modal").addEventListener("click", (e) => { if (e.target === $("#settings-modal")) closeSettingsModal(); });
@@ -1729,32 +1868,64 @@ async function init() {
   $("#btn-theme-toggle").addEventListener("click", async () => {
     const next = state.appState?.config?.ui?.theme === "light" ? "dark" : "light";
     await saveSetting({ ui: { theme: next } });
+    if (!$("#settings-modal").classList.contains("hidden")) renderSettingsContent();
   });
 
   $("#btn-dictate-now").addEventListener("click", async () => {
     await api("/api/dictate/toggle", { method: "POST" });
     await refreshState();
+    if (state.tab === "dictation") renderCurrentView();
+  });
+
+  // Keyboard shortcuts (Esc to close sheets/cancel edit, Ctrl+, for Settings, Ctrl+K for Search)
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if (!$("#form-modal").classList.contains("hidden")) closeFormModal();
+      else if (!$("#settings-modal").classList.contains("hidden")) closeSettingsModal();
+      else if (state.editingDictationId !== null) {
+        state.editingDictationId = null;
+        renderCurrentView();
+      }
+    } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+      e.preventDefault();
+      openSettingsModal("general");
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      const search = $("#dictation-search") || $("#dict-search") || $("#snip-search") || $("#note-search");
+      if (search) {
+        e.preventDefault();
+        search.focus();
+      }
+    }
   });
 
   await refreshState();
   const params = new URLSearchParams(window.location.search);
   const initialTab = params.get("tab") || "dictation";
-  await switchTab(initialTab);
+  const initialStab = params.get("stab") || "general";
+  if (initialTab === "settings") {
+    await switchTab("dictation");
+    await openSettingsModal(initialStab);
+  } else {
+    await switchTab(initialTab);
+  }
 
-  // Light periodic refresh so new dictations & live engine status appear automatically.
+  // Live polling for recording timer & completed dictations
   setInterval(async () => {
     try {
       const prevState = state.appState?.state;
       await refreshState();
-      if (prevState === "processing" && state.appState.state === "idle" && (state.tab === "dictation" || state.tab === "insights")) {
-        await loadTabData(state.tab);
-        renderCanvas();
+      if (state.tab === "dictation" && prevState !== state.appState.state) {
+        await loadTabData("dictation");
+        renderCurrentView();
+      } else if (prevState === "processing" && state.appState.state === "idle" && state.tab === "insights") {
+        await loadTabData("insights");
+        renderCurrentView();
       }
     } catch {}
-  }, 1500);
+  }, 900);
 }
 
 init().catch((err) => {
   console.error(err);
-  $("#main-canvas").innerHTML = `<div class="empty-state"><h4>Could not connect to VoxBox daemon</h4><p>${esc(err.message)}</p></div>`;
+  $("#main-canvas").innerHTML = `<div class="empty-state"><h4>Could not connect to VoxBox</h4><p>${esc(err.message)}</p></div>`;
 });

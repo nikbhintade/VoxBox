@@ -268,7 +268,15 @@ class VoxBoxAPI:
                 path = urlparse(self.path).path
                 try:
                     body = self._read_json()
-                    if path.startswith("/api/scratchpad/"):
+                    if path.startswith("/api/dictations/"):
+                        item_id = int(path.rsplit("/", 1)[-1])
+                        updated = app_ref.db.update_dictation(item_id, str(body.get("cleaned_text", "")))
+                        if not updated:
+                            self._send_json({"error": "Dictation not found"}, status=404)
+                            return
+                        app_ref.tray.update_history(app_ref.db.list_dictations(limit=8))
+                        self._send_json({"item": updated})
+                    elif path.startswith("/api/scratchpad/"):
                         note_id = int(path.rsplit("/", 1)[-1])
                         updated = app_ref.db.update_note(
                             note_id,

@@ -156,6 +156,19 @@ class VoxBoxDB:
                 ).fetchall()
             return [dict(r) for r in rows]
 
+    def update_dictation(self, item_id: int, cleaned_text: str) -> dict[str, Any] | None:
+        cleaned_text = cleaned_text.strip()
+        words = len(cleaned_text.split())
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE dictations SET cleaned_text = ?, word_count = ? WHERE id = ?",
+                (cleaned_text, words, item_id),
+            )
+            if cur.rowcount == 0:
+                return None
+            row = self._conn.execute("SELECT * FROM dictations WHERE id = ?", (item_id,)).fetchone()
+            return dict(row)
+
     def delete_dictation(self, item_id: int) -> bool:
         with self._lock, self._conn:
             cur = self._conn.execute("DELETE FROM dictations WHERE id = ?", (item_id,))
