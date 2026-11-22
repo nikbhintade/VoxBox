@@ -108,9 +108,17 @@ function updateLiveControls() {
   const hk = state.appState.hotkey_label || "Right Ctrl";
 
   const dot = $("#status-dot");
-  dot.className = `status-dot ${st}`;
+  dot.className = `status-dot ${st === "needs_model" ? "processing" : st}`;
   $("#status-text").textContent =
-    st === "recording" ? "Recording" : st === "processing" ? "Transcribing" : st === "error" ? "Error" : "Ready";
+    st === "recording"
+      ? "Recording"
+      : st === "processing"
+      ? "Transcribing"
+      : st === "needs_model"
+      ? "Choose Model"
+      : st === "error"
+      ? "Error"
+      : "Ready";
   const llmText = cfg.llm.enabled
     ? `${state.appState.llm_provider_label} · ${state.appState.llm_active_model}`
     : "Raw Whisper";
@@ -245,7 +253,16 @@ function renderDictationView(root) {
   );
 
   let liveBanner = "";
-  if (st === "recording") {
+  if (state.appState.needs_model) {
+    liveBanner = `
+      <div class="live-banner processing">
+        <div class="live-banner-left">
+          <span class="status-dot processing"></span>
+          <span>No Whisper speech model installed yet. Choose and download a model to start dictating.</span>
+        </div>
+        <button class="btn btn-primary btn-sm" id="btn-banner-pick-model">Choose Model</button>
+      </div>`;
+  } else if (st === "recording") {
     liveBanner = `
       <div class="live-banner">
         <div class="live-banner-left">
@@ -364,6 +381,8 @@ function renderDictationView(root) {
       }
     }, 160);
   });
+
+  $("#btn-banner-pick-model")?.addEventListener("click", () => openSettingsModal("models"));
 
   $("#btn-banner-stop")?.addEventListener("click", async () => {
     await api("/api/dictate/toggle", { method: "POST" });
@@ -1295,7 +1314,17 @@ function renderSettingsContent() {
     const models = res.whisper_models || [];
     const anyDownloading = models.some((m) => m.downloading);
 
+    const firstRunCallout = state.appState.needs_model
+      ? `<div class="live-banner processing" style="margin-bottom:16px">
+           <div class="live-banner-left">
+             <span class="status-dot processing"></span>
+             <span><strong>Welcome to VoxBox.</strong> No model is downloaded automatically — pick a Whisper model below that fits your hardware, click <strong>Download</strong>, then click <strong>Use</strong>.</span>
+           </div>
+         </div>`
+      : "";
+
     el.innerHTML = `
+      ${firstRunCallout}
       <div class="pref-desc" style="margin-bottom:14px">
         Download and switch between local Whisper GGML models. Turbo and Large models excel on GPUs; Base and Tiny run smoothly on CPU.
       </div>

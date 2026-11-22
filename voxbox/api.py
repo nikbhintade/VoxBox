@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__
 from .audio import list_microphones
 from .config import CONFIG_PATH, DATA_DIR, PROJECT_DIR, STYLE_PROMPTS, friendly_key_name
 from .llm import CLOUD_PROVIDERS, list_ollama_models
@@ -87,9 +88,10 @@ class VoxBoxAPI:
                         cfg = app_ref.config
                         self._send_json(
                             {
-                                "version": "0.2.0",
+                                "version": __version__,
                                 "state": app_ref.current_state,
                                 "stt_ready": app_ref.stt.is_ready,
+                                "needs_model": app_ref.current_state == "needs_model" or not cfg.stt.resolved_model_path.is_file(),
                                 "hotkey_label": friendly_key_name(cfg.hotkey.key),
                                 "llm_provider_label": cfg.llm.active_provider_label(),
                                 "llm_active_model": cfg.llm.active_model_name(),

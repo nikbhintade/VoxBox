@@ -1,6 +1,8 @@
 # Compiled binaries & vendor sources
 bin/
+dist/
 whisper.cpp/
+release-notes.md
 
 # Python
 __pycache__/

@@ -63,7 +63,17 @@ class SttConfig:
 
     @property
     def resolved_server_bin(self) -> Path:
-        return Path(os.path.expanduser(self.server_bin))
+        configured = Path(os.path.expanduser(self.server_bin))
+        if configured.is_file():
+            return configured
+        for candidate in (
+            PROJECT_DIR / "bin" / "whisper-server",
+            Path("/usr/lib/voxbox/bin/whisper-server"),
+            Path("/usr/local/bin/whisper-server"),
+        ):
+            if candidate.is_file():
+                return candidate
+        return configured
 
     @property
     def resolved_model_path(self) -> Path:

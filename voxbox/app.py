@@ -208,9 +208,24 @@ class VoxBoxApp:
 
     def _bootstrap(self) -> None:
         try:
+            self.hotkey.start()
+            model_path = self.config.stt.resolved_model_path
+            if not model_path.is_file():
+                # Check if user already has another local model installed
+                existing = sorted((self.models.models_dir).glob("*.bin"))
+                if existing:
+                    self.config.stt.model_path = str(existing[0])
+                    save_config(self.config, CONFIG_PATH)
+                    self.stt.config = self.config.stt
+                else:
+                    # First-run: never auto-download — prompt user to pick their preferred model.
+                    log.info("No Whisper model installed yet; prompting user in Speech Models.")
+                    self._set_state("needs_model", "Choose a speech model…")
+                    self.open_hub("settings", stab="models")
+                    return
+
             self.stt.start(wait_timeout=30.0)
             self.llm.warmup_async()
-            self.hotkey.start()
             self._set_state("idle", f"Ready · Hold {friendly_key_name(self.config.hotkey.key)}")
             log.info("VoxBox ready! Hold %s to dictate.", friendly_key_name(self.config.hotkey.key))
         except Exception as e:
@@ -250,9 +265,11 @@ class VoxBoxApp:
         else:
             self._start_recording(manual=True)
 
-    def open_hub(self, tab: str = "dictation") -> None:
+    def open_hub(self, tab: str = "dictation", stab: str = "") -> None:
         hub_script = str(PROJECT_DIR / "voxbox_hub.py")
         url = f"http://127.0.0.1:{self.config.ui.api_port}/?tab={tab}"
+        if stab:
+            url += f"&stab={stab}"
         # If Hub is already open, close and relaunch on requested tab or let single-instance focus it.
         if self._hub_proc is not None and self._hub_proc.poll() is None:
             try:
@@ -347,11 +364,12 @@ class VoxBoxApp:
         return self.config
 
     def _restart_stt(self) -> None:
-        self._set_state("processing", "Reloading Whisper…")
+        self._set_state("processing", "Loading Whisper…")
         try:
             self.stt.stop()
             self.stt.start(wait_timeout=30.0)
-            self._set_state("idle")
+            self.llm.warmup_async()
+            self._set_state("idle", f"Ready · Hold {friendly_key_name(self.config.hotkey.key)}")
         except Exception as e:
             log.error("STT reload failed: %s", e)
             self._set_state("error", "STT reload failed")
@@ -385,6 +403,9 @@ class VoxBoxApp:
     # ---------- Recording & Pipeline ----------
 
     def _start_recording(self, manual: bool = False) -> None:
+        if self.current_state == "needs_model" or not self.config.stt.resolved_model_path.is_file():
+            self.open_hub("settings", stab="models")
+            return
         with self._busy_lock:
             if self._processing or self.recorder.is_recording:
                 return

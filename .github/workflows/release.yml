@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64 (.deb & .tar.gz)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine release version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install build dependencies (Vulkan + CMake + Ninja)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git dpkg-dev \
+            libvulkan-dev glslc
+
+      - name: Build portable whisper-server (Vulkan + CPU)
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git whisper.cpp
+          cmake -S whisper.cpp -B whisper.cpp/build -G Ninja \
+            -DGGML_VULKAN=1 \
+            -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DBUILD_SHARED_LIBS=OFF
+          cmake --build whisper.cpp/build --target whisper-server -j"$(nproc)"
+          mkdir -p bin
+          cp whisper.cpp/build/bin/whisper-server bin/whisper-server
+          chmod +x bin/whisper-server
+          ./bin/whisper-server --help | head -n 5
+
+      - name: Package .deb, .tar.gz, and SHA256SUMS.txt
+        run: |
+          chmod +x scripts/package-linux.sh
+          ./scripts/package-linux.sh "${{ steps.meta.outputs.version }}" dist
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          python3 - "${{ steps.meta.outputs.version }}" <<'EOF' > release-notes.md
+          import re, sys
+          from pathlib import Path
+          ver = sys.argv[1]
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          m = re.search(rf"^## \[{re.escape(ver)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, re.M | re.S)
+          body = m.group(1).strip() if m else f"Release v{ver}"
+          print(body)
+          print()
+          print("### Installation (Ubuntu / Debian)")
+          print("```bash")
+          print(f"sudo apt install ./voxbox_{ver}_amd64.deb")
+          print("sudo usermod -aG input $USER   # then log out & back in once")
+          print("systemctl --user enable --now ydotool.service voxbox.service")
+          print("```")
+          print()
+          print("### Portable Linux (Arch / Fedora / other distros)")
+          print("```bash")
+          print(f"tar -xzf voxbox-{ver}-linux-x86_64.tar.gz && cd voxbox-{ver}-linux-x86_64")
+          print("./install.sh && systemctl --user start voxbox.service")
+          print("```")
+          print()
+          print("> **Note:** No speech model is downloaded automatically. On first launch, VoxBox opens **Settings → Speech Models** so you can choose and download the Whisper model that best fits your hardware. The bundled `whisper-server` binary supports **Vulkan GPU acceleration (NVIDIA / AMD / Intel) + CPU fallback**; NVIDIA users can optionally run `./scripts/build-whisper.sh` for native CUDA.")
+          EOF
+          cat release-notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: VoxBox ${{ steps.meta.outputs.tag }}
+          body_path: release-notes.md
+          files: |
+            dist/voxbox_${{ steps.meta.outputs.version }}_amd64.deb
+            dist/voxbox-${{ steps.meta.outputs.version }}-linux-x86_64.tar.gz
+            dist/SHA256SUMS.txt

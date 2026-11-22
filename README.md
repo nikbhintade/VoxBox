@@ -1,34 +1,49 @@
 # VoxBox
 
-A fast, 100% offline **Wispr Flow–style** voice dictation app purpose-built for **Linux (Ubuntu GNOME Wayland) + NVIDIA CUDA + local Ollama**.
+A fast, offline-first voice dictation studio built for **Linux (Ubuntu GNOME Wayland)** with local Whisper speech recognition, multi-provider AI cleanup, a 60fps bottom-center floating bar, and a native desktop Hub.
 
 ## Features
-- **True global Hold-to-Talk on Wayland** — kernel-level `evdev` listener (no GNOME shortcut hacks, ignores key repeats, auto-recovers on keyboard hotplug/wake, `Esc` to cancel).
-- **Bottom-center Floating Bar** — ultra-minimal translucent resting line with border → expands on hover to show your hotkey tooltip + Mic & Notetaker buttons → expands during dictation into `[✕ | live 9-bar waveform | ✓]`.
-- **CUDA-accelerated Whisper (`large-v3-turbo`)** — stays warm in VRAM (~150 ms transcription for 10s of speech).
-- **Always-on local Ollama AI cleanup** — removes filler words, fixes self-corrections and punctuation, respects your personal **Dictionary**, expands **Snippets**, applies your **Style** and optional **Transforms** — 100% offline.
-- **Universal Wayland pasting** — `wl-copy` (both Clipboard & Primary) + `ydotool` (`Shift+Insert` works in both GUI apps and terminals).
-- **Native Desktop Hub (Dark mode default + Light toggle)** — Dictation history, Insights (WPM, AI fixes, activity streak heatmap), Dictionary, Snippets, Style, Transforms, Scratchpad, and live Settings.
-- **Planned (Phase 2): Meeting Notetaker** — dual-stream audio capture (mic + PipeWire system speaker monitor) for live call transcripts and local Ollama meeting summaries.
+- **True Global Hold-to-Talk on Wayland** — kernel-level `evdev` listener (works across all apps and terminals with zero compositor shortcut workarounds, hotplug/wake recovery, and `Esc` to cancel).
+- **Bottom-Center Floating Bar** — thin translucent resting bar → smoothly expands on hover with your hotkey tooltip + Mic & Notetaker controls → fluid 60fps 9-bar waveform pill while recording and polishing.
+- **In-App Speech Models Manager (User Choice)** — no model is downloaded automatically. On first launch, VoxBox prompts you to pick and download from 7 official Whisper GGML models (Tiny to Large v3 Turbo) based on your hardware, or drop any custom `.bin` model into `~/.local/share/voxbox/models/`.
+- **Multi-Provider AI Cleanup** — local **Ollama** (with VRAM-tiered in-app model pulling) plus native **Gemini**, **Claude**, **OpenAI**, and **OpenAI-compatible** APIs (Groq, OpenRouter, DeepSeek, Together AI, Cerebras, LM Studio) — zero extra SDK dependencies.
+- **Universal Wayland Pasting** — `wl-copy` (both Clipboard and Primary selection) + `ydotool` (`Shift+Insert`, `Ctrl+V`, `Ctrl+Shift+V`, direct typing, or clipboard-only).
+- **Desktop Hub (Dark & Light)** — Dictation feed with inline editing & `.txt` export, master-detail Scratchpad with `.md` export, Dictionary, Snippets, Style presets, Transforms, Insights analytics & streak heatmap, and Settings.
+- **Planned (Phase 2): Meeting Notetaker** — dual-stream PipeWire audio capture (mic + system speaker monitor) for offline call transcripts and summaries.
 
-## Requirements (Ubuntu 26.04 / Debian)
+## Quick Install (GitHub Releases)
+
+### Ubuntu / Debian (`.deb`)
+Download `voxbox_<version>_amd64.deb` from the [Releases](https://github.com/nikbhintade/VoxBox/releases) page:
+```bash
+sudo apt install ./voxbox_0.1.0_amd64.deb
+sudo usermod -aG input "$USER"
+# Log out and log back in once so input group permissions take effect, then:
+systemctl --user enable --now ydotool.service voxbox.service
+```
+
+### Other Linux Distros (`.tar.gz`)
+Download `voxbox-<version>-linux-x86_64.tar.gz` from [Releases](https://github.com/nikbhintade/VoxBox/releases):
+```bash
+tar -xzf voxbox-0.1.0-linux-x86_64.tar.gz && cd voxbox-0.1.0-linux-x86_64
+./install.sh
+systemctl --user start voxbox.service
+```
+
+> **GPU Acceleration:** Release binaries ship with a portable **Vulkan + CPU** `whisper-server` (supports NVIDIA, AMD, Intel GPUs, and CPU fallback). NVIDIA users with CUDA Toolkit installed can optionally run `./scripts/build-whisper.sh` to compile a native CUDA binary.
+
+## Building from Source
 ```bash
 sudo apt install -y \
   wl-clipboard ydotool python3-evdev python3-gi python3-gi-cairo \
   python3-numpy python3-requests gir1.2-gtk-3.0 gir1.2-webkit2-4.1 \
-  gir1.2-ayatanaappindicator3-0.1 cmake ninja-build
-sudo usermod -aG input "$USER"
-# Log out and back in so the input group & ydotool.service take effect.
-```
-
-## Setup
-```bash
-./scripts/build-whisper.sh   # Compiles CUDA whisper-server & downloads large-v3-turbo-q8_0
-./install.sh                 # Installs CLI, desktop launcher, and systemd user service
+  gir1.2-ayatanaappindicator3-0.1 cmake ninja-build libvulkan-dev glslc
+./scripts/build-whisper.sh
+./install.sh
 systemctl --user start voxbox.service
 ```
 
-## Usage
-- **Hold `Right Ctrl`** anywhere → speak → release to transcribe, clean, and paste.
-- Click the **VoxBox** icon in your top bar (or launch **VoxBox** from Ubuntu Apps) to open the Desktop Hub.
-- Config lives at `~/.config/voxbox/config.toml`; local database lives at `~/.local/share/voxbox/voxbox.db`.
+## License
+Dual-licensed under your choice of either:
+- **MIT License** ([LICENSE-MIT](LICENSE-MIT))
+- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
