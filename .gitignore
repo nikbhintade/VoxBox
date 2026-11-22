@@ -1,0 +1,16 @@
+# Compiled binaries & vendor sources
+bin/
+whisper.cpp/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local runtime & OS artifacts
+*.db
+*.sqlite
+*.log
+.DS_Store
