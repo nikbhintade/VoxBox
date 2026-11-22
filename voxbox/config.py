@@ -73,16 +73,50 @@ class SttConfig:
 @dataclass
 class LlmConfig:
     enabled: bool = True
+    provider: str = "ollama"  # ollama | gemini | claude | openai | openai_compatible
+    # Local Ollama
     base_url: str = "http://127.0.0.1:11434"
     model: str = "qwen3:14b"
     think: bool = False
     keep_alive: str = "30m"
     warmup_on_start: bool = True
+    # Cloud providers & OpenAI-compatible endpoints
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash-lite"
+    claude_api_key: str = ""
+    claude_model: str = "claude-haiku-4-5"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    compat_base_url: str = "https://api.groq.com/openai/v1"
+    compat_api_key: str = ""
+    compat_model: str = "llama-3.3-70b-versatile"
+    # Shared
     timeout_sec: float = 20.0
     active_style: str = "default"
     custom_instructions: str = ""
     auto_transform_id: int | None = None
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
+
+    def active_model_name(self) -> str:
+        p = self.provider
+        if p == "gemini":
+            return self.gemini_model
+        if p == "claude":
+            return self.claude_model
+        if p == "openai":
+            return self.openai_model
+        if p == "openai_compatible":
+            return self.compat_model
+        return self.model
+
+    def active_provider_label(self) -> str:
+        return {
+            "ollama": "Ollama",
+            "gemini": "Gemini",
+            "claude": "Claude",
+            "openai": "OpenAI",
+            "openai_compatible": "OpenAI-Compat",
+        }.get(self.provider, self.provider)
 
 
 @dataclass
@@ -148,6 +182,10 @@ def save_config(cfg: Config, path: Path = CONFIG_PATH) -> Path:
             lines.append(f"{k} = {_toml_val(v)}")
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
     return path
 
 

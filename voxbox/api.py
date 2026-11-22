@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .audio import list_microphones
 from .config import CONFIG_PATH, DATA_DIR, PROJECT_DIR, STYLE_PROMPTS, friendly_key_name
-from .llm import list_ollama_models
+from .llm import CLOUD_PROVIDERS, list_ollama_models
 from .paste import copy_to_clipboard
 from .stt import list_whisper_models
 
@@ -91,6 +91,8 @@ class VoxBoxAPI:
                                 "state": app_ref.current_state,
                                 "stt_ready": app_ref.stt.is_ready,
                                 "hotkey_label": friendly_key_name(cfg.hotkey.key),
+                                "llm_provider_label": cfg.llm.active_provider_label(),
+                                "llm_active_model": cfg.llm.active_model_name(),
                                 "config": cfg.to_dict(),
                                 "styles": STYLE_PROMPTS,
                                 "autostart": app_ref.is_autostart_enabled(),
@@ -118,6 +120,19 @@ class VoxBoxAPI:
                         self._send_json({"items": app_ref.db.list_notes(q)})
                     elif path == "/api/models":
                         self._send_json({"items": app_ref.models.list_models(app_ref.config.stt.resolved_model_path)})
+                    elif path == "/api/llm/catalog":
+                        cfg_llm = app_ref.config.llm
+                        self._send_json(
+                            {
+                                "provider": cfg_llm.provider,
+                                "ollama": app_ref.ollama_pulls.catalog(
+                                    cfg_llm.base_url,
+                                    cfg_llm.model,
+                                    cfg_llm.provider == "ollama",
+                                ),
+                                "cloud": CLOUD_PROVIDERS,
+                            }
+                        )
                     elif path == "/api/system/resources":
                         self._send_json(
                             {
@@ -229,6 +244,15 @@ class VoxBoxAPI:
                             return
                         updated = app_ref.update_settings({"stt": {"model_path": str(target)}})
                         self._send_json({"ok": True, "config": updated.to_dict()})
+                    elif path == "/api/llm/ollama/pull":
+                        res = app_ref.ollama_pulls.start_pull(app_ref.config.llm.base_url, str(body.get("model", "")))
+                        self._send_json(res)
+                    elif path == "/api/llm/ollama/cancel":
+                        ok = app_ref.ollama_pulls.cancel_pull(str(body.get("model", "")))
+                        self._send_json({"ok": ok})
+                    elif path == "/api/llm/test":
+                        res = app_ref.llm.test_connection()
+                        self._send_json(res)
                     elif path == "/api/dictate/toggle":
                         app_ref.toggle_manual_recording()
                         self._send_json({"ok": True, "state": app_ref.current_state})
@@ -266,6 +290,17 @@ class VoxBoxAPI:
                 path = urlparse(self.path).path
                 try:
                     parts = [p for p in path.split("/") if p]
+                    if len(parts) == 4 and parts[:3] == ["api", "llm", "ollama"]:
+                        from urllib.parse import unquote
+                        model_name = unquote(parts[3])
+                        ok = app_ref.ollama_pulls.delete_model(
+                            app_ref.config.llm.base_url,
+                            model_name,
+                            app_ref.config.llm.model,
+                            app_ref.config.llm.provider == "ollama",
+                        )
+                        self._send_json({"ok": ok})
+                        return
                     if len(parts) == 3 and parts[0] == "api":
                         resource, raw_id = parts[1], parts[2]
                         if resource == "models":

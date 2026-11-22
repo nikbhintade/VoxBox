@@ -26,7 +26,7 @@ from .config import (
 )
 from .db import VoxBoxDB
 from .hotkey import EvdevHotkeyListener, capture_next_hotkey
-from .llm import OllamaCleaner, count_word_edits
+from .llm import LLMCleaner, OllamaPullManager, count_word_edits
 from .models import ModelManager
 from .paste import copy_to_clipboard, paste_text
 from .stt import WhisperServer
@@ -137,9 +137,10 @@ class VoxBoxApp:
 
         self.db = VoxBoxDB()
         self.models = ModelManager()
+        self.ollama_pulls = OllamaPullManager()
         self.sounds = SoundCues(enabled=self.config.audio.sound_effects)
         self.stt = WhisperServer(self.config.stt)
-        self.llm = OllamaCleaner(self.config.llm)
+        self.llm = LLMCleaner(self.config.llm)
         self.api = VoxBoxAPI(self, port=self.config.ui.api_port)
         self.bar = FloatingBarBridge(on_action=self._handle_bar_action)
         self.tray = VoxBoxTray(

@@ -87,7 +87,10 @@ async function refreshState() {
   const st = state.appState.state;
   $("#status-text").textContent =
     st === "recording" ? "Listening…" : st === "processing" ? "Polishing…" : st === "error" ? "Error" : "Ready";
-  $("#status-sub").textContent = `Hold ${hk} · ${cfg.llm.enabled ? cfg.llm.model : "Raw STT"}`;
+  const llmLabel = cfg.llm.enabled
+    ? `${state.appState.llm_provider_label || cfg.llm.provider} · ${state.appState.llm_active_model || cfg.llm.model}`
+    : "Raw STT";
+  $("#status-sub").textContent = `Hold ${hk} · ${llmLabel}`;
 }
 
 async function loadTabData(tab) {
@@ -229,9 +232,9 @@ function renderDictationView() {
           <div class="stat-row"><span class="stat-num">${ins.current_streak}</span><span class="stat-label">${ins.current_streak === 1 ? "day" : "days"} streak</span></div>
           <div class="stat-divider"></div>
           <div style="font-size:12.5px;color:var(--text-secondary)">
-            <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px">Local Pipeline</div>
+            <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px">Active Pipeline</div>
             <div>CUDA STT · ~${ins.avg_stt_ms || 150}ms</div>
-            <div>${esc(cfg.llm.model)} · ~${ins.avg_llm_ms || 450}ms</div>
+            <div>${cfg.llm.enabled ? `${esc(state.appState.llm_provider_label)} (${esc(state.appState.llm_active_model)})` : "AI Cleanup Off"} · ~${ins.avg_llm_ms || 400}ms</div>
             <div style="margin-top:6px;color:var(--accent)">Style: ${esc(cfg.llm.active_style)}</div>
           </div>
         </aside>
@@ -954,7 +957,9 @@ function stopModelsPolling() {
 
 async function openSettingsModal(stab = "general") {
   state.settingsTab = stab;
-  state.resources = await api("/api/system/resources");
+  const [res, llmCat] = await Promise.all([api("/api/system/resources"), api("/api/llm/catalog")]);
+  state.resources = res;
+  state.llmCatalog = llmCat;
   await refreshState();
   $("#settings-modal").classList.remove("hidden");
   renderSettingsContent();
@@ -971,6 +976,7 @@ function renderSettingsContent() {
   const titles = {
     general: "General",
     models: "Speech Models",
+    llm: "AI Cleanup",
     system: "System",
     notetaker: "Notetaker",
     privacy: "Data & Privacy",
@@ -991,11 +997,6 @@ function renderSettingsContent() {
           .map((m) => `<option value="${esc(m.id)}" ${m.active ? "selected" : ""}>${esc(m.name)} (${esc(m.size_label)})</option>`)
           .join("")
       : `<option value="">No models downloaded</option>`;
-    const ollamaOpts = res.ollama_models.length
-      ? res.ollama_models
-          .map((m) => `<option value="${esc(m.name)}" ${cfg.llm.model === m.name ? "selected" : ""}>${esc(m.name)} (${m.size_gb} GB)</option>`)
-          .join("")
-      : `<option value="${esc(cfg.llm.model)}">${esc(cfg.llm.model)}</option>`;
     const langOpts = [
       ["en", "English"],
       ["auto", "Auto-detect"],
@@ -1048,18 +1049,12 @@ function renderSettingsContent() {
         </div>
         <div class="setting-row">
           <div>
-            <div class="setting-title">Ollama AI Cleanup</div>
-            <div class="setting-desc">Always clean up filler words, self-corrections &amp; punctuation locally.</div>
+            <div class="setting-title">AI Cleanup</div>
+            <div class="setting-desc">Active: <strong>${esc(state.appState.llm_provider_label)}</strong> · <code>${esc(state.appState.llm_active_model)}</code></div>
           </div>
-          <label class="switch"><input type="checkbox" id="set-llm-en" ${cfg.llm.enabled ? "checked" : ""}/><span class="slider"></span></label>
-        </div>
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">Ollama Model</div>
-            <div class="setting-desc">Local model kept hot in GPU VRAM (${esc(cfg.llm.keep_alive)}).</div>
-          </div>
-          <div class="setting-control">
-            <select class="select" id="set-ollama">${ollamaOpts}</select>
+          <div class="setting-control" style="gap:10px;align-items:center">
+            <button class="btn btn-secondary btn-sm" id="btn-goto-llm">Configure…</button>
+            <label class="switch"><input type="checkbox" id="set-llm-en" ${cfg.llm.enabled ? "checked" : ""}/><span class="slider"></span></label>
           </div>
         </div>
         <div class="setting-row">
@@ -1108,10 +1103,357 @@ function renderSettingsContent() {
       state.settingsTab = "models";
       renderSettingsContent();
     });
+    $("#btn-goto-llm").addEventListener("click", () => {
+      state.settingsTab = "llm";
+      renderSettingsContent();
+    });
     $("#set-lang").addEventListener("change", (e) => saveSetting({ stt: { language: e.target.value } }));
     $("#set-llm-en").addEventListener("change", (e) => saveSetting({ llm: { enabled: e.target.checked } }));
-    $("#set-ollama").addEventListener("change", (e) => saveSetting({ llm: { model: e.target.value } }));
     $("#set-theme").addEventListener("change", (e) => saveSetting({ ui: { theme: e.target.value } }));
+  } else if (state.settingsTab === "llm") {
+    const cat = state.llmCatalog || { ollama: { reachable: false, items: [] }, cloud: {} };
+    const provider = cfg.llm.provider || "ollama";
+    const providers = [
+      ["ollama", "Ollama (Local)"],
+      ["gemini", "Gemini"],
+      ["claude", "Claude"],
+      ["openai", "OpenAI"],
+      ["openai_compatible", "OpenAI-Compatible"],
+    ];
+
+    let providerBody = "";
+    let anyPulling = false;
+
+    if (provider === "ollama") {
+      const items = cat.ollama?.items || [];
+      anyPulling = items.some((m) => m.pulling);
+      providerBody = `
+        <div class="setting-group">
+          <div class="setting-row">
+            <div>
+              <div class="setting-title">Ollama Server URL</div>
+              <div class="setting-desc">${cat.ollama?.reachable ? "Connected to local Ollama" : "Ollama not reachable at this URL"}</div>
+            </div>
+            <div class="setting-control" style="min-width:220px">
+              <input class="input" id="llm-ollama-url" value="${esc(cfg.llm.base_url)}" />
+            </div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-title">Disable Thinking Tokens (Faster)</div>
+              <div class="setting-desc">Recommended for Qwen3 models (~400ms instead of 5–10s).</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="llm-nothink" ${!cfg.llm.think ? "checked" : ""}/><span class="slider"></span></label>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-title">Pull Custom Ollama Tag</div>
+              <div class="setting-desc">Download any model from ollama.com (e.g. <code>mistral:7b</code>).</div>
+            </div>
+            <div class="setting-control inline-row" style="min-width:250px">
+              <input class="input" id="llm-custom-pull" placeholder="e.g. qwen3:4b" />
+              <button class="btn btn-secondary btn-sm" id="btn-custom-pull" style="white-space:nowrap">Pull</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.06em;color:var(--text-muted);text-transform:uppercase;margin:14px 0 8px">
+          Local Ollama Models (by VRAM)
+        </div>
+        <div class="model-list">
+          ${items
+            .map((m) => {
+              let act = "";
+              if (m.pulling) {
+                act = `<button class="btn btn-secondary btn-sm ol-cancel" data-m="${esc(m.name)}">Cancel</button>`;
+              } else if (m.active) {
+                act = `<span class="model-badge active-pill">Active</span>`;
+              } else if (m.installed) {
+                act = `
+                  <button class="btn btn-primary btn-sm ol-use" data-m="${esc(m.name)}">Use</button>
+                  <button class="btn btn-secondary btn-sm ol-del" data-m="${esc(m.name)}" title="Delete">✕</button>`;
+              } else {
+                act = `<button class="btn btn-secondary btn-sm ol-pull" data-m="${esc(m.name)}">Pull</button>`;
+              }
+              const prog = m.pulling
+                ? `<div class="model-progress-wrap">
+                     <div class="model-progress-track"><div class="model-progress-fill" style="width:${m.progress}%"></div></div>
+                     <span class="model-progress-label">${m.progress}% · ${esc(m.status || "pulling")}</span>
+                   </div>`
+                : m.error
+                ? `<div style="font-size:12px;color:var(--danger)">Pull error: ${esc(m.error)}</div>`
+                : "";
+              return `
+                <div class="model-card ${m.active ? "active" : ""}">
+                  <div class="model-card-top">
+                    <div>
+                      <div class="model-title-row">
+                        <span class="model-name">${esc(m.name)}</span>
+                        <span class="model-badge rec">${esc(m.vram)}</span>
+                        <span class="model-badge">${esc(m.badge)}</span>
+                      </div>
+                      <div class="model-meta">${esc(m.size_label)} — ${esc(m.description)}</div>
+                    </div>
+                    <div class="model-actions">${act}</div>
+                  </div>
+                  ${prog}
+                </div>`;
+            })
+            .join("")}
+        </div>`;
+    } else if (provider === "gemini" || provider === "claude" || provider === "openai") {
+      const keyField = `${provider}_api_key`;
+      const modelField = `${provider}_model`;
+      const curKey = cfg.llm[keyField] || "";
+      const curModel = cfg.llm[modelField] || "";
+      const suggested = cat.cloud?.[provider]?.models || [];
+      const inList = suggested.some((m) => m.id === curModel);
+      const opts = [
+        ...suggested.map((m) => `<option value="${esc(m.id)}" ${curModel === m.id ? "selected" : ""}>${esc(m.label)}</option>`),
+        `<option value="__custom__" ${!inList ? "selected" : ""}>Custom model ID…</option>`,
+      ].join("");
+
+      const keyHints = {
+        gemini: "Get a key at aistudio.google.com — stored locally in ~/.config/voxbox/config.toml (chmod 600).",
+        claude: "Get a key at console.anthropic.com — stored locally in ~/.config/voxbox/config.toml (chmod 600).",
+        openai: "Get a key at platform.openai.com — stored locally in ~/.config/voxbox/config.toml (chmod 600).",
+      };
+
+      providerBody = `
+        <div class="setting-group">
+          <div class="setting-row">
+            <div style="flex:1">
+              <div class="setting-title">${esc(cat.cloud?.[provider]?.label || provider)} API Key</div>
+              <div class="setting-desc">${keyHints[provider]}</div>
+              <div class="inline-row" style="margin-top:8px">
+                <input type="password" class="input" id="llm-cloud-key" value="${esc(curKey)}" placeholder="Paste API key…" />
+                <button class="btn btn-secondary btn-sm" id="btn-toggle-key">Show</button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-title">Model</div>
+              <div class="setting-desc">Pick a fast recommended model or enter any custom model ID.</div>
+            </div>
+            <div class="setting-control" style="min-width:250px">
+              <select class="select" id="llm-cloud-select">${opts}</select>
+            </div>
+          </div>
+          <div class="setting-row ${inList ? "hidden" : ""}" id="llm-custom-model-row">
+            <div>
+              <div class="setting-title">Custom Model ID</div>
+              <div class="setting-desc">Exact API model identifier.</div>
+            </div>
+            <div class="setting-control" style="min-width:250px">
+              <input class="input" id="llm-cloud-custom" value="${esc(curModel)}" placeholder="Model ID" />
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px">
+          <button class="btn btn-primary" id="btn-save-cloud">Save ${esc(cat.cloud?.[provider]?.label || provider)} settings</button>
+        </div>`;
+    } else {
+      const presets = cat.cloud?.openai_compatible?.presets || [];
+      providerBody = `
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Quick presets (click to fill Base URL &amp; suggested model):</div>
+        <div class="preset-row">
+          ${presets.map((p, idx) => `<button class="preset-chip compat-preset" data-idx="${idx}">${esc(p.name)}</button>`).join("")}
+        </div>
+        <div class="setting-group">
+          <div class="setting-row">
+            <div style="flex:1">
+              <div class="setting-title">Base URL</div>
+              <div class="setting-desc">Any OpenAI-compatible <code>/v1</code> endpoint (Groq, OpenRouter, DeepSeek, vLLM, LM Studio…).</div>
+              <input class="input" id="llm-compat-url" style="margin-top:8px" value="${esc(cfg.llm.compat_base_url)}" placeholder="https://api.groq.com/openai/v1" />
+            </div>
+          </div>
+          <div class="setting-row">
+            <div style="flex:1">
+              <div class="setting-title">API Key</div>
+              <div class="setting-desc">Leave blank for unauthenticated local servers (e.g. LM Studio / vLLM).</div>
+              <div class="inline-row" style="margin-top:8px">
+                <input type="password" class="input" id="llm-compat-key" value="${esc(cfg.llm.compat_api_key)}" placeholder="Paste API key…" />
+                <button class="btn btn-secondary btn-sm" id="btn-toggle-key">Show</button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div style="flex:1">
+              <div class="setting-title">Model ID</div>
+              <div class="setting-desc">Exact model string expected by this endpoint.</div>
+              <input class="input" id="llm-compat-model" style="margin-top:8px" value="${esc(cfg.llm.compat_model)}" placeholder="e.g. llama-3.3-70b-versatile" />
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px">
+          <button class="btn btn-primary" id="btn-save-compat">Save provider settings</button>
+        </div>`;
+    }
+
+    el.innerHTML = `
+      <div class="setting-group">
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">Enable AI Cleanup</div>
+            <div class="setting-desc">Remove filler words, fix self-corrections &amp; punctuation after Whisper transcribes.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="llm-master-en" ${cfg.llm.enabled ? "checked" : ""}/><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <div class="provider-pills">
+        ${providers.map(([k, lbl]) => `<button class="provider-pill ${provider === k ? "active" : ""}" data-prov="${k}">${esc(lbl)}</button>`).join("")}
+      </div>
+
+      ${providerBody}
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px">
+        <span style="font-size:12.5px;color:var(--text-secondary)">Verify your active provider &amp; measure latency:</span>
+        <button class="btn btn-secondary" id="btn-test-llm">Test Cleanup</button>
+      </div>
+      <div class="test-result hidden" id="llm-test-out"></div>`;
+
+    $("#llm-master-en").addEventListener("change", (e) => saveSetting({ llm: { enabled: e.target.checked } }));
+    $$(".provider-pill").forEach((b) =>
+      b.addEventListener("click", async () => {
+        await api("/api/settings", { method: "POST", body: { llm: { provider: b.dataset.prov } } });
+        state.llmCatalog = await api("/api/llm/catalog");
+        await refreshState();
+        renderSettingsContent();
+      })
+    );
+
+    $("#btn-toggle-key")?.addEventListener("click", (e) => {
+      const inp = $("#llm-cloud-key") || $("#llm-compat-key");
+      if (!inp) return;
+      const show = inp.type === "password";
+      inp.type = show ? "text" : "password";
+      e.target.textContent = show ? "Hide" : "Show";
+    });
+
+    if (provider === "ollama") {
+      $("#llm-ollama-url")?.addEventListener("change", async (e) => {
+        await saveSetting({ llm: { base_url: e.target.value.trim() } });
+        state.llmCatalog = await api("/api/llm/catalog");
+        renderSettingsContent();
+      });
+      $("#llm-nothink")?.addEventListener("change", (e) => saveSetting({ llm: { think: !e.target.checked } }));
+      $("#btn-custom-pull")?.addEventListener("click", async () => {
+        const tag = $("#llm-custom-pull").value.trim();
+        if (!tag) return;
+        await api("/api/llm/ollama/pull", { method: "POST", body: { model: tag } });
+        state.llmCatalog = await api("/api/llm/catalog");
+        renderSettingsContent();
+        toast(`Pulling ${tag}…`);
+      });
+      $$(".ol-use").forEach((b) =>
+        b.addEventListener("click", async () => {
+          await api("/api/settings", { method: "POST", body: { llm: { provider: "ollama", model: b.dataset.m } } });
+          state.llmCatalog = await api("/api/llm/catalog");
+          await refreshState();
+          renderSettingsContent();
+          toast(`Switched to ${b.dataset.m}`);
+        })
+      );
+      $$(".ol-pull").forEach((b) =>
+        b.addEventListener("click", async () => {
+          await api("/api/llm/ollama/pull", { method: "POST", body: { model: b.dataset.m } });
+          state.llmCatalog = await api("/api/llm/catalog");
+          renderSettingsContent();
+          toast(`Pulling ${b.dataset.m}…`);
+        })
+      );
+      $$(".ol-cancel").forEach((b) =>
+        b.addEventListener("click", async () => {
+          await api("/api/llm/ollama/cancel", { method: "POST", body: { model: b.dataset.m } });
+          state.llmCatalog = await api("/api/llm/catalog");
+          renderSettingsContent();
+          toast("Pull cancelled");
+        })
+      );
+      $$(".ol-del").forEach((b) =>
+        b.addEventListener("click", async () => {
+          try {
+            await api(`/api/llm/ollama/${encodeURIComponent(b.dataset.m)}`, { method: "DELETE" });
+            state.llmCatalog = await api("/api/llm/catalog");
+            renderSettingsContent();
+            toast(`Deleted ${b.dataset.m}`);
+          } catch (err) {
+            toast(err.message);
+          }
+        })
+      );
+
+      if (anyPulling) {
+        modelsPollTimer = setInterval(async () => {
+          try {
+            state.llmCatalog = await api("/api/llm/catalog");
+            if (state.settingsTab === "llm" && !$("#settings-modal").classList.contains("hidden")) {
+              renderSettingsContent();
+            } else {
+              stopModelsPolling();
+            }
+          } catch {
+            stopModelsPolling();
+          }
+        }, 700);
+      }
+    } else if (provider === "gemini" || provider === "claude" || provider === "openai") {
+      $("#llm-cloud-select")?.addEventListener("change", (e) => {
+        const isCustom = e.target.value === "__custom__";
+        $("#llm-custom-model-row").classList.toggle("hidden", !isCustom);
+        if (!isCustom) $("#llm-cloud-custom").value = e.target.value;
+      });
+      $("#btn-save-cloud")?.addEventListener("click", async () => {
+        const selVal = $("#llm-cloud-select").value;
+        const chosenModel = selVal === "__custom__" ? $("#llm-cloud-custom").value.trim() : selVal;
+        const keyVal = $("#llm-cloud-key").value.trim();
+        await saveSetting({ llm: { provider, [`${provider}_api_key`]: keyVal, [`${provider}_model`]: chosenModel } });
+      });
+    } else {
+      const presets = cat.cloud?.openai_compatible?.presets || [];
+      $$(".compat-preset").forEach((b) =>
+        b.addEventListener("click", () => {
+          const p = presets[Number(b.dataset.idx)];
+          if (!p) return;
+          $("#llm-compat-url").value = p.base_url;
+          $("#llm-compat-model").value = p.model;
+          toast(`Loaded ${p.name} preset — paste your API key and Save`);
+        })
+      );
+      $("#btn-save-compat")?.addEventListener("click", async () => {
+        await saveSetting({
+          llm: {
+            provider: "openai_compatible",
+            compat_base_url: $("#llm-compat-url").value.trim(),
+            compat_api_key: $("#llm-compat-key").value.trim(),
+            compat_model: $("#llm-compat-model").value.trim(),
+          },
+        });
+      });
+    }
+
+    $("#btn-test-llm").addEventListener("click", async (e) => {
+      const btn = e.target;
+      const box = $("#llm-test-out");
+      btn.disabled = true;
+      btn.textContent = "Testing…";
+      box.className = "test-result";
+      box.textContent = "Running sample cleanup…";
+      box.classList.remove("hidden");
+      try {
+        const r = await api("/api/llm/test", { method: "POST" });
+        box.className = "test-result ok";
+        box.innerHTML = `<strong>✓ ${esc(r.provider)} · ${esc(r.model)} (${r.latency_ms} ms)</strong><div style="margin-top:4px;color:var(--text-primary)">${esc(r.result)}</div>`;
+      } catch (err) {
+        box.className = "test-result err";
+        box.textContent = `✗ ${err.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Test Cleanup";
+      }
+    });
   } else if (state.settingsTab === "models") {
     const models = res.whisper_models || [];
     const anyDownloading = models.some((m) => m.downloading);
