@@ -291,6 +291,8 @@ class VoxBoxApp:
         self.config.llm.enabled = enabled
         self.llm.config.enabled = enabled
         save_config(self.config, CONFIG_PATH)
+        if not enabled:
+            threading.Thread(target=self.llm.unload_ollama, daemon=True).start()
 
     def _on_toggle_bar(self, show: bool) -> None:
         self.config.ui.show_flow_bar = show
@@ -323,6 +325,9 @@ class VoxBoxApp:
     def update_settings(self, patch: dict[str, Any]) -> Config:
         old_key = self.config.hotkey.key
         old_stt = (self.config.stt.model_path, self.config.stt.language, self.config.stt.port)
+        old_llm_enabled = self.config.llm.enabled
+        old_llm_provider = self.config.llm.provider
+        old_ollama_model = self.config.llm.model
 
         for section_name, fields in patch.items():
             if not isinstance(fields, dict):
@@ -340,6 +345,15 @@ class VoxBoxApp:
         self.sounds.enabled = self.config.audio.sound_effects
         self.recorder.config = self.config.audio
         self.llm.config = self.config.llm
+
+        # Free VRAM immediately if Ollama cleanup was disabled, switched away, or changed model
+        switched_off_ollama = old_llm_enabled and old_llm_provider == "ollama" and (
+            not self.config.llm.enabled
+            or self.config.llm.provider != "ollama"
+            or self.config.llm.model != old_ollama_model
+        )
+        if switched_off_ollama:
+            threading.Thread(target=self.llm.unload_ollama, args=([old_ollama_model],), daemon=True).start()
 
         if self.config.hotkey.key != old_key:
             self.hotkey.stop()
@@ -527,7 +541,15 @@ class VoxBoxApp:
         self.tray.quit_mainloop()
 
     def _cleanup(self) -> None:
-        for fn in (self.hotkey.stop, self.recorder.cancel, self.bar.stop, self.stt.stop, self.api.stop, self.db.close):
+        for fn in (
+            self.hotkey.stop,
+            self.recorder.cancel,
+            self.bar.stop,
+            self.stt.stop,
+            self.llm.unload_ollama,
+            self.api.stop,
+            self.db.close,
+        ):
             try:
                 fn()
             except Exception:

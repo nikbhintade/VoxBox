@@ -358,6 +358,8 @@ class LLMCleaner:
     def __init__(self, config: LlmConfig) -> None:
         self.config = config
         self._session = requests.Session()
+        self._loaded_ollama_models: set[str] = set()
+        self._loaded_lock = threading.Lock()
 
     def _build_system_prompt(
         self,
@@ -398,6 +400,36 @@ class LLMCleaner:
             return
         threading.Thread(target=self._warmup_ollama, name="voxbox-ollama-warmup", daemon=True).start()
 
+    def _track_ollama_model(self, model: str) -> None:
+        if model:
+            with self._loaded_lock:
+                self._loaded_ollama_models.add(model)
+
+    def unload_ollama(self, models: list[str] | None = None) -> None:
+        """Ask Ollama to immediately evict model(s) from VRAM (keep_alive=0)."""
+        with self._loaded_lock:
+            targets = list(models) if models is not None else list(self._loaded_ollama_models)
+        if models is None and self.config.provider == "ollama" and self.config.model and self.config.model not in targets:
+            # Also ensure the currently configured Ollama model is unloaded if still warm
+            targets.append(self.config.model)
+
+        base = self.config.base_url.rstrip("/")
+        for model in targets:
+            if not model:
+                continue
+            try:
+                r = self._session.post(
+                    f"{base}/api/chat",
+                    json={"model": model, "messages": [], "keep_alive": 0},
+                    timeout=5.0,
+                )
+                if r.status_code < 400:
+                    log.info("Unloaded Ollama model %s from VRAM", model)
+            except Exception as e:
+                log.debug("Could not unload Ollama model %s: %s", model, e)
+            with self._loaded_lock:
+                self._loaded_ollama_models.discard(model)
+
     def _warmup_ollama(self) -> None:
         t0 = time.monotonic()
         try:
@@ -414,6 +446,7 @@ class LLMCleaner:
                 timeout=60.0,
             )
             r.raise_for_status()
+            self._track_ollama_model(self.config.model)
             log.info("Ollama model %s warmed up in %.2fs", self.config.model, time.monotonic() - t0)
         except Exception as e:
             log.warning("Ollama warmup failed: %s", e)
@@ -438,6 +471,7 @@ class LLMCleaner:
                 timeout=self.config.timeout_sec,
             )
             r.raise_for_status()
+            self._track_ollama_model(self.config.model)
             return str(r.json().get("message", {}).get("content", "")).strip()
 
         if provider == "gemini":
